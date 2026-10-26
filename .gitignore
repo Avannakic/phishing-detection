@@ -1,22 +1,39 @@
+# Виртуальные окружения
 .venv/
 venv/
 env/
 
+# Кэш Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
+# Данные и CSV-датасеты
 data/interim/*
 data/processed/*
-
 *.csv
 
+# Артефакты обучения моделей и чекпоинты HuggingFace Trainer
+results/
+results_part1/
+results_part2/
+checkpoint-*/
+runs/
+wandb/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+
+# IDE и редакторы
 .vscode/
 .idea/
 *.swp
 *.swo
 
+# Системные файлы ОС
 .DS_Store
 .DS_Store?
 ._*

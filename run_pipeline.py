@@ -18,7 +18,8 @@ PROCESSING_STEPS = [
     "03_clean_and_filter.py",
     "04_merge_synthetic_pools.py",
     "05_procedural_urls.py",
-    "06_build_training_datasets.py",
+    "06_finalise_datasets.py",
+    "07_train_rubert_and_results.py",
 ]
 
 
@@ -31,11 +32,11 @@ def run_step(script_path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Запуск пайплайна подготовки синтетических и гибридных данных")
+    parser = argparse.ArgumentParser(description="Запуск пайплайна подготовки синтетических и гибридных данных и дообучений моделей RuBERT")
     parser.add_argument(
         "--include-generation",
         action="store_true",
-        help="Включить долгие шаги генерации через Ollama (01 и 02)"
+        help="Включить долгие шаги генерации через Ollama (00, 01 и 02)"
     )
     parser.add_argument(
         "--scripts-dir",

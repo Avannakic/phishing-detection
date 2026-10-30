@@ -2,7 +2,8 @@ import re
 import os
 import pandas as pd
 
-DATA_DIR = os.path.join("data", "interim")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 
 FILES_TO_CLEAN = [
     (os.path.join(DATA_DIR, "raw_synthetic_base.csv"), os.path.join(DATA_DIR, "cleaned_synthetic_base.csv")),

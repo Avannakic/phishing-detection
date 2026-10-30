@@ -1,21 +1,32 @@
  #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 00: Генерация синтетических фоновых классов 0 (Ham) и 1 (Spam) 
-с помощью локальной LLM Meta Llama 3 (8B Instruct) через Ollama.
-Формирует датасеты по 10 000 сообщений для обучения Модели 2 (Synthetic Only).
+Шаг 00: генерация синтетических фоновых классов 0 (Ham) и 1 (Spam)
+через локальный Ollama с автоматическим fallback при отказах Qwen3.
 """
 
 import os
 import re
 import random
 import argparse
+from collections import deque
+
 import pandas as pd
 import ollama
 
-MODEL_NAME = "llama3"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_NAME = "qwen3:14b"
+FALLBACK_MODEL = "vikhr-llama3.1-8b"
 TEMPERATURE = 0.8
 SEED = 42
+REFUSAL_WINDOW_SIZE = 20
+REFUSAL_RATE_THRESHOLD = 0.65
+MAX_CONSECUTIVE_REFUSALS = 3
+MIN_RESPONSE_LENGTH = 25
+REFUSAL_MARKERS = (
+    "я не могу", "извините", "как ии", "не могу помочь",
+    "мошеннич", "незаконн", "as an ai", "i cannot",
+)
 
 # =====================================================================
 # 1. КОНФИГУРАЦИЯ КЛАССА 0 (HAM / ЛЕГИТИМНЫЕ СООБЩЕНИЯ)
@@ -138,18 +149,51 @@ SPAM_STYLES = [
 BAD_STARTS = ("я не ", "к сожалению", "вот ", "конечно", "сообщения:", "в качестве")
 
 
-def get_llama_response(prompt: str) -> str:
-    try:
-        response = ollama.generate(
-            model=MODEL_NAME,
-            prompt=prompt,
-            stream=False,
-            options={"temperature": TEMPERATURE}
+def is_refusal(text: str) -> bool:
+    clean_text = text.strip().lower()
+    return len(clean_text) < MIN_RESPONSE_LENGTH or any(
+        marker in clean_text for marker in REFUSAL_MARKERS
+    )
+
+
+class OllamaGenerator:
+    def __init__(self):
+        self.current_model = MODEL_NAME
+        self.refusal_window = deque(maxlen=REFUSAL_WINDOW_SIZE)
+        self.consecutive_refusals = 0
+
+    def generate(self, prompt: str) -> str:
+        try:
+            response = ollama.generate(
+                model=self.current_model,
+                prompt=prompt,
+                stream=False,
+                options={"temperature": TEMPERATURE},
+            )
+            text = response["response"]
+        except Exception as exc:
+            print(f"[Ошибка Ollama, {self.current_model}]: {exc}")
+            text = ""
+
+        refused = is_refusal(text)
+        self.refusal_window.append(refused)
+        self.consecutive_refusals = self.consecutive_refusals + 1 if refused else 0
+
+        rate_exceeded = (
+            len(self.refusal_window) == REFUSAL_WINDOW_SIZE
+            and sum(self.refusal_window) / REFUSAL_WINDOW_SIZE > REFUSAL_RATE_THRESHOLD
         )
-        return response["response"]
-    except Exception as e:
-        print(f"[Ошибка Ollama]: {e}")
-        return ""
+        if self.current_model == MODEL_NAME and (
+            rate_exceeded or self.consecutive_refusals >= MAX_CONSECUTIVE_REFUSALS
+        ):
+            print(
+                "[WARN] Высокий процент отказов Qwen3-14B (>65%). "
+                "Переключение генератора на VIKHR..."
+            )
+            self.current_model = FALLBACK_MODEL
+            self.consecutive_refusals = 0
+
+        return "" if refused else text
 
 
 def build_ham_prompt(base_topic: str, emotion: str, long_detail: str, length_type: str, count: int, length_desc: str, is_long: bool, style: str) -> str:
@@ -211,7 +255,11 @@ def generate_class_corpus(
         dataset = set()
 
     requests_made = 0
-    print(f"[{class_name}] Старт генерации (цель: {target_count} уникальных сообщений)...")
+    generator = OllamaGenerator()
+    print(
+        f"[{class_name}] Старт генерации (цель: {target_count} уникальных сообщений, "
+        f"модель: {generator.current_model})..."
+    )
 
     try:
         while len(dataset) < target_count:
@@ -228,7 +276,7 @@ def generate_class_corpus(
             prompt = prompt_builder_fn(
                 base_topic, emotion, long_detail, length_type, count, length_desc, is_long, style
             )
-            text = get_llama_response(prompt)
+            text = generator.generate(prompt)
             lines = [line.strip() for line in text.split("\n") if line.strip()]
 
             for line in lines:
@@ -251,23 +299,29 @@ def generate_class_corpus(
 
             requests_made += 1
             if requests_made % 10 == 0:
-                print(f"[{class_name}] Запросов: {requests_made} | Собрано: {len(dataset)}/{target_count}")
+                print(
+                    f"[{class_name}] Запросов: {requests_made} | "
+                    f"Собрано: {len(dataset)}/{target_count} | Модель: {generator.current_model}"
+                )
 
             if requests_made % 100 == 0:
-                pd.DataFrame({"message": list(dataset)}).to_csv(progress_path, index=False, encoding="utf-8")
+                pd.DataFrame({"message": sorted(dataset)}).to_csv(
+                    progress_path, index=False, encoding="utf-8"
+                )
 
     except KeyboardInterrupt:
         print(f"\n[{class_name}] Прервано пользователем. Сохраняем накопленные {len(dataset)} строк...")
 
     if len(dataset) > 0:
-        final_list = list(dataset)[:target_count]
+        final_list = sorted(dataset)[:target_count]
+        pd.DataFrame({"message": final_list}).to_csv(progress_path, index=False, encoding="utf-8")
         df_out = pd.DataFrame({
             "message": final_list,
             "text": final_list,
             "label": label_id
         })
         df_out.to_csv(output_path, index=False, encoding="utf-8")
-        if os.path.exists(progress_path):
+        if len(dataset) >= target_count and os.path.exists(progress_path):
             os.remove(progress_path)
         print(f"[{class_name}] Готово! Сохранено {len(df_out)} строк в {output_path}\n")
 
@@ -276,7 +330,12 @@ def main():
     parser = argparse.ArgumentParser(description="Генерация синтетических классов Ham (0) и Spam (1)")
     parser.add_argument("--target_ham", type=int, default=14000, help="Целевое число сообщений Ham")
     parser.add_argument("--target_spam", type=int, default=14000, help="Целевое число сообщений Spam")
-    parser.add_argument("--out_dir", type=str, default="data/interim", help="Директория сохранения")
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default=os.path.join(PROJECT_ROOT, "data", "interim"),
+        help="Директория сохранения",
+    )
     parser.add_argument("--mode", choices=["all", "ham", "spam"], default="all", help="Какой класс генерировать")
     args = parser.parse_args()
 

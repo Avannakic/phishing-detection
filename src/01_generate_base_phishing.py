@@ -1,14 +1,27 @@
-import ollama 
-import pandas as pd
-import time 
-import re
+import os
 import random
-import os 
+import re
+from collections import deque
+
+import ollama
+import pandas as pd
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_NAME = "qwen3:14b"
+FALLBACK_MODEL = "vikhr-llama3.1-8b"
+TEMPERATURE = 0.8
+REFUSAL_WINDOW_SIZE = 20
+REFUSAL_RATE_THRESHOLD = 0.65
+MAX_CONSECUTIVE_REFUSALS = 3
+MIN_RESPONSE_LENGTH = 25
+REFUSAL_MARKERS = (
+    "я не могу", "извините", "как ии", "не могу помочь",
+    "мошеннич", "незаконн", "as an ai", "i cannot",
+)
 
 random.seed(42)
-model_name = "llama3"
-target_count = 5000
-out_dir = "data/interim"
+target_count = 14000
+out_dir = os.path.join(PROJECT_ROOT, "data", "interim")
 os.makedirs(out_dir, exist_ok=True)
 progress_file = os.path.join(out_dir, "synthetic_phishing_v1_progress.csv")
 
@@ -96,18 +109,49 @@ for sender, tactics in SCENARIOS.items():
 
 random.shuffle(valid_combinations)
 
-def get_llama_response(prompt):
-    try:
-        response = ollama.generate(
-            model=model_name,
-            prompt=prompt,
-            stream=False,
-            options={"temperature": 0.8}
+def is_refusal(text):
+    clean_text = text.strip().lower()
+    return len(clean_text) < MIN_RESPONSE_LENGTH or any(
+        marker in clean_text for marker in REFUSAL_MARKERS
+    )
+
+
+class OllamaGenerator:
+    def __init__(self):
+        self.current_model = MODEL_NAME
+        self.refusal_window = deque(maxlen=REFUSAL_WINDOW_SIZE)
+        self.consecutive_refusals = 0
+
+    def generate(self, prompt):
+        try:
+            response = ollama.generate(
+                model=self.current_model,
+                prompt=prompt,
+                stream=False,
+                options={"temperature": TEMPERATURE},
+            )
+            text = response["response"]
+        except Exception as exc:
+            print(f"[Ошибка Ollama, {self.current_model}]: {exc}")
+            text = ""
+
+        refused = is_refusal(text)
+        self.refusal_window.append(refused)
+        self.consecutive_refusals = self.consecutive_refusals + 1 if refused else 0
+        rate_exceeded = (
+            len(self.refusal_window) == REFUSAL_WINDOW_SIZE
+            and sum(self.refusal_window) / REFUSAL_WINDOW_SIZE > REFUSAL_RATE_THRESHOLD
         )
-        return response['response']
-    except Exception as e:
-        print(f"Error generating response: {e}")
-        return "" 
+        if self.current_model == MODEL_NAME and (
+            rate_exceeded or self.consecutive_refusals >= MAX_CONSECUTIVE_REFUSALS
+        ):
+            print(
+                "[WARN] Высокий процент отказов Qwen3-14B (>65%). "
+                "Переключение генератора на VIKHR..."
+            )
+            self.current_model = FALLBACK_MODEL
+            self.consecutive_refusals = 0
+        return "" if refused else text
 
 if os.path.exists(progress_file):
     dataset = set(pd.read_csv(progress_file)['message'].tolist())
@@ -117,9 +161,10 @@ else:
 
 combo_idx = 0
 requests_made = 0
+generator = OllamaGenerator()
 
 print(f"Всего доступно уникальных комбинаций промпта: {len(valid_combinations)}")
-print(f"Начинаем генерацию {target_count} сообщений...")
+print(f"Начинаем генерацию {target_count} сообщений с модели {generator.current_model}...")
 
 bad_starts = ("я не могу", "i cannot", "к сожалению", "однако", "извините", "простите", "as an ai", "я обязан", "сообщение")
 bad_words = ["example", "test", "sample", "insert", "вставь", "[ссылка"]
@@ -151,36 +196,39 @@ try:
             f"Отвечай ТОЛЬКО самими сообщениями. Каждое сообщение с новой строки. Без нумерации, без кавычек."
         )
 
-        text = get_llama_response(prompt)
+        text = generator.generate(prompt)
         lines = [line.strip() for line in text.split('\n') if line.strip()]
-        
+
         for line in lines:
             if "Here" in line or "Вот" in line or "Сгенерирован" in line:
                 continue
             clean_line = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
             if clean_line.startswith('"') and clean_line.endswith('"'):
                 clean_line = clean_line[1:-1]
-            
+
             clean_lower = clean_line.lower()
-            
-            # ФИЛЬТРЫ
             if len(clean_line) < 25:
                 continue
             if clean_lower.startswith(bad_starts):
                 continue
             if any(bw in clean_lower for bw in bad_words):
                 continue
-            
+
             dataset.add(clean_line)
-            
+
         requests_made += 1
         combo_idx = (combo_idx + 1) % len(valid_combinations)
-        
+
         if requests_made % 10 == 0:
-            print(f"Запросов: {requests_made}. Собрано уникальных чистых: {len(dataset)}/{target_count}")
-        
+            print(
+                f"Запросов: {requests_made}. Собрано: {len(dataset)}/{target_count}. "
+                f"Модель: {generator.current_model}"
+            )
+
         if requests_made % 50 == 0:
-            pd.DataFrame(list(dataset), columns=['message']).to_csv(progress_file, index=False, encoding="utf-8")
+            pd.DataFrame(sorted(dataset), columns=['message']).to_csv(
+                progress_file, index=False, encoding="utf-8"
+            )
             print("Промежуточное сохранение выполнено.")
 
 except KeyboardInterrupt:
@@ -188,11 +236,13 @@ except KeyboardInterrupt:
 
 if len(dataset) > 0:
     final_filename = os.path.join(out_dir, "raw_synthetic_base.csv")
-    pd.DataFrame(list(dataset), columns=['message']).to_csv(final_filename, index=False, encoding="utf-8")
-    
-    if os.path.exists(progress_file):
+    final_list = sorted(dataset)[:target_count]
+    pd.DataFrame(final_list, columns=['message']).to_csv(final_filename, index=False, encoding="utf-8")
+    pd.DataFrame(final_list, columns=['message']).to_csv(progress_file, index=False, encoding="utf-8")
+
+    if len(dataset) >= target_count and os.path.exists(progress_file):
         os.remove(progress_file)
-        
-    print(f"\nГотово! Сгенерировано: {len(dataset)} уникальных сообщений. Файл сохранен как {final_filename}")
+
+    print(f"\nГотово! Сгенерировано: {len(final_list)} уникальных сообщений. Файл сохранен как {final_filename}")
 else:
     print("\nДанных не собрано, сохранять нечего.")

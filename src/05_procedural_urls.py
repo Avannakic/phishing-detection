@@ -4,7 +4,8 @@ import random
 import string
 import os
 
-DATA_DIR = os.path.join("data", "interim")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 
 input_file = os.path.join(DATA_DIR, "merged_synthetic_phishing.csv")
 output_file = os.path.join(DATA_DIR, "final_synthetic_phishing.csv")

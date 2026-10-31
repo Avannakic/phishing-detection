@@ -7,7 +7,7 @@ import ollama
 import pandas as pd
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_NAME = "qwen3:14b"
+MODEL_NAME = "vikhr-llama3.1-8b"
 MIN_RESPONSE_LENGTH = 25
 REFUSAL_MARKERS = (
     "я не могу", "извините", "как ии", "не могу помочь",
@@ -97,11 +97,11 @@ class OllamaGenerator:
                 prompt=prompt,
                 stream=False,
                 options={
-                    "temperature": 0.85,
-                    "top_p": 0.90,
-                    "top_k": 40,
-                    "repeat_penalty": 1.12,
-                    "num_predict": 250
+                    "temperature": 0.75,      # Достаточно для креативности, но без бреда
+                    "top_p": 0.90,            
+                    "top_k": 40,              
+                    "repeat_penalty": 1.05,   # Минимальный штраф, чтобы не ломать русскую грамматику
+                    "num_predict": 200        
                 },
             )
             text = response["response"]

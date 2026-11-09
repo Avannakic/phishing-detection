@@ -1,71 +1,208 @@
-import re
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Шаг 03: построчная глубокая regex-очистка всех синтетических пулов
+(Phishing Base, Phishing Targeted, Spam, Ham), удаление старых URL,
+мета-комментариев ИИ, приветствий, плейсхолдеров и оборванных концовок.
+"""
+
 import os
+import re
+from typing import Optional
+
 import pandas as pd
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 
+# (входной_файл, выходной_файл, label_val)
 FILES_TO_CLEAN = [
-    (os.path.join(DATA_DIR, "raw_synthetic_base.csv"), os.path.join(DATA_DIR, "cleaned_synthetic_base.csv")),
-    (os.path.join(DATA_DIR, "raw_synthetic_targeted.csv"), os.path.join(DATA_DIR, "cleaned_synthetic_targeted.csv")),
+    (
+        os.path.join(DATA_DIR, "raw_synthetic_base.csv"),
+        os.path.join(DATA_DIR, "cleaned_synthetic_base.csv"),
+        2,
+    ),
+    (
+        os.path.join(DATA_DIR, "raw_synthetic_targeted.csv"),
+        os.path.join(DATA_DIR, "cleaned_synthetic_targeted.csv"),
+        2,
+    ),
+    (
+        os.path.join(DATA_DIR, "synthetic_spam.csv"),
+        os.path.join(DATA_DIR, "cleaned_synthetic_spam.csv"),
+        1,
+    ),
+    (
+        os.path.join(DATA_DIR, "synthetic_ham.csv"),
+        os.path.join(DATA_DIR, "cleaned_synthetic_ham.csv"),
+        0,
+    ),
 ]
+
+# 1. Полное вырезание любых существующих (в т.ч. склеенных и Markdown) ссылок перед текстовой очисткой
+FULL_URL_STRIP = re.compile(
+    r"\[([^\]]+)\]\([^\)]+\)|"
+    r"\S*(?:https?://|t\.me/|vk\.cc/|bit\.ly/|clck\.ru/|goo\.gl/|youtu\.be/)\S*|"
+    r"\b[a-z0-9_\-]+\.(?:ru|com|net|org|su|рф|io|me|cc|online|store|tech|pro|center|today|ly|gl|be)(?:/\S*)?",
+    flags=re.IGNORECASE,
+)
+
+# 2. Индикаторы незаполненных плейсхолдеров LLM и проверка наличия кириллицы
+PLACEHOLDER_PATTERN = re.compile(r"[\[\]<>{}]|example\.com", flags=re.IGNORECASE)
+BAD_BRACKET_PATTERN = re.compile(r"\[[^\]]*(?:вредоносн|malicious|фишинг)[^\]]*\]", flags=re.IGNORECASE)
+HAS_CYRILLIC = re.compile(r"[а-яёА-ЯЁ]")
+
+# 3. Мета-комментарии языковой модели и обучающие советы по ИБ
+META_PATTERNS = re.compile(
+    r"(###|\bпример\w*\s*\d|\bобразец\s*\d|\bпримечание|\bконец\s+примеров|\bот\s+лица\s|"
+    r"\bдля\s+учебн|\bсгенерирован|\bсоциальн\w+\s+инженер|\bантиспам|\bзлоумышленник|"
+    r"\bдатасет|\bальтернативный\s+пример|\bанонимное\s+сообщение|\bтексты\s+создан|"
+    r"\bсообщения\s+создан|\bпримеры\s+создан|\bсозданы\s+с\s+целью|\bв\s+соответствии\s+с\s+правилами|"
+    r"\bзащитить\s+себя\s+от\s+фишинг|\bбезопасность\s+начинается\s+с\s+вас|\bоформлены\s+максимально\s+правдоподобно)",
+    flags=re.IGNORECASE,
+)
+
+# 4. Форматирование, приветствия и шапки отправителей
+LEAD_JUNK = re.compile(r"^[\s\"\'\`\*\#\-\–\—\•\d\.\)\:]+")
+MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+
+PREFIX_STRIP = re.compile(
+    r"^(?:[^\wА-Яа-яЁё]*"
+    r"(?:уважаем\w+\s+(?:пользовател\w+|клиент\w*|студент\w*|коллег\w+|граждан\w*|геймер\w*|друз\w+|читател\w+|партнер\w*|пациент\w*)|"
+    r"здравствуйте|здравствуй|приветствую(?:\s+вас)?|привет(?:ик)?|"
+    r"добрый\s+(?:день|вечер)|доброго\s+времени(?:\s+суток)?|"
+    r"внимание|срочно(?:е\s+уведомление|\s+сообщение)?|важно(?:е\s+уведомление|\s+сообщение|\s+для\s+ваших\s+счетов)?|"
+    r"(?:банк\s+)?(?:втб|сбербанк|сбер|т-банк|т\s+банк|фсб(?:\s+рф|\s+россии)?|цб\s+рф|госуслуги|емиас|telegram)\s*[\:\—\-])"
+    r"[!,\.\:\—\-\s]*)+",
+    flags=re.IGNORECASE,
+)
+
+# 5. Оборванные на полуслове или предлоге фразы (проверяется ПОСЛЕ удаления URL)
+TRUNCATED_END = re.compile(
+    r"(\b(и|в|на|с|по|для|от|к|о|из|за|при|до|без|через|или|что|как|но|а|причём|также|ин|зад|об|провер)|[,:;—\-])\s*$",
+    flags=re.IGNORECASE,
+)
 
 BAD_STARTS = (
     "я не могу", "i cannot", "к сожалению", "однако", "извините", "простите",
-    "as an ai", "я обязан", "сообщение", "сгенерированное сообщение",
-    "here is", "here are", "here's", "sure", "certainly", "of course",
-    "below", "the following", "вот ", "конечно", "настоящим", "в качестве", "here"
+    "as an ai", "я обязан", "сгенерированное сообщение",
+    "here is", "here are", "sure", "certainly", "of course",
+    "вот ", "конечно", "настоящим", "в качестве",
 )
 
-# 'example' и '[ссылка' оставлены для процедурной замены на URL в Шаге 4
 BAD_WORDS = [
     "test", "sample", "insert", "вставь",
-    "phishing", "фишинг", "пример", "prompt", "промпт"
+    "phishing", "фишинг", "пример", "prompt", "промпт",
 ]
 
-BAD_BRACKET_PATTERN = re.compile(r"\[[^\]]*(?:вредоносн|malicious|фишинг)[^\]]*\]", re.IGNORECASE)
+
+def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
+    if not isinstance(raw_text, str):
+        return None
+    raw_stripped = raw_text.strip()
+    if not raw_stripped:
+        return None
+
+    # 1. Отсев мета-комментариев ИИ, плейсхолдеров example.com и вредоносных скобочных меток
+    if (
+        META_PATTERNS.search(raw_stripped)
+        or BAD_BRACKET_PATTERN.search(raw_stripped)
+        or re.search(r"\bexample\.(?:com|ru|org|net)\b", raw_stripped, flags=re.IGNORECASE)
+    ):
+        return None
+
+    # 2. Снятие жирного Markdown-форматирования и полное вырезание старых ссылок
+    line = MD_BOLD.sub(r"\1", raw_stripped).strip()
+    if not line or line.startswith("*"):
+        return None
+
+    had_url = bool(FULL_URL_STRIP.search(line))
+    line = FULL_URL_STRIP.sub("", line)
+
+    # 3. Проверка плейсхолдеров, баланса языков и стоп-слов после удаления URL
+    if PLACEHOLDER_PATTERN.search(line) or BAD_BRACKET_PATTERN.search(line) or not HAS_CYRILLIC.search(line):
+        return None
+
+    ru_chars = len(re.findall(r"[А-Яа-яЁё]", line))
+    en_chars = len(re.findall(r"[A-Za-z]", line))
+    min_ru_chars = 10 if label_val == 0 else 15
+    if ru_chars < min_ru_chars or en_chars > ru_chars:
+        return None
+
+    line_lower_pre = line.strip().lower()
+    if any(bw in line_lower_pre for bw in BAD_WORDS):
+        return None
+    if label_val == 2:
+        if "емиас" in line_lower_pre or line_lower_pre.startswith(BAD_STARTS):
+            return None
+
+    # 4. Очистка мусорных префиксов, кавычек, приветствий и шапок отправителей
+    line = LEAD_JUNK.sub("", line).strip()
+    if (line.startswith('"') and line.endswith('"')) or (line.startswith("'") and line.endswith("'")):
+        line = line[1:-1].strip()
+    elif line.endswith('"') or line.endswith("'"):
+        line = line[:-1].strip()
+
+    line = PREFIX_STRIP.sub("", line).strip()
+    line = LEAD_JUNK.sub("", line).strip()
+    line = re.sub(r"\s+", " ", line).strip()
+
+    if had_url:
+        line = re.sub(r"[\s:\-—]+$", "", line).strip()
+
+    if not line:
+        return None
+
+    clean_lower = line.lower()
+    if any(bw in clean_lower for bw in BAD_WORDS):
+        return None
+    if label_val == 2:
+        if "емиас" in clean_lower or clean_lower.startswith(BAD_STARTS):
+            return None
+
+    if len(line) < 25 or TRUNCATED_END.search(line):
+        return None
+
+    words = re.findall(r"[а-яёa-z0-9]+", clean_lower)
+    if len(words) < 4:
+        return None
+
+    if line[0].islower() and line[0].isalpha():
+        line = line[0].upper() + line[1:]
+
+    return line
 
 
-def is_valid_russian_phishing(text: str) -> bool:
-    if not isinstance(text, str):
-        return False
-    clean_line = text.strip()
-    clean_lower = clean_line.lower()
-
-    if len(clean_line) < 25 or clean_line.startswith("*"):
-        return False
-    if "емиас" in clean_lower:
-        return False
-
-    ru_chars = len(re.findall(r"[А-Яа-яЁё]", clean_line))
-    en_chars = len(re.findall(r"[A-Za-z]", clean_line))
-    if ru_chars < 15 or en_chars > ru_chars:
-        return False
-
-    if clean_lower.startswith(BAD_STARTS) and (":" in clean_line or len(clean_line) < 100):
-        return False
-    if any(bw in clean_lower for bw in BAD_WORDS) or BAD_BRACKET_PATTERN.search(clean_line):
-        return False
-
-    return True
-
-
-def process_dataset(input_file: str, output_file: str):
+def process_dataset(input_file: str, output_file: str, label_val: int):
     if not os.path.exists(input_file):
         print(f"[WARN] Файл {input_file} не найден, пропуск.")
         return
+
     df = pd.read_csv(input_file)
-    initial_count = len(df)
+    col = "message" if "message" in df.columns else "text"
+    raw_msgs = df[col].dropna().astype(str).tolist()
+    initial_count = len(raw_msgs)
 
-    df_clean = df.dropna(subset=["message"]).copy()
-    df_clean = df_clean[df_clean["message"].apply(is_valid_russian_phishing)]
-    df_clean = df_clean.drop_duplicates(subset=["message"])
-    df_clean = df_clean.sort_values(by="message", key=lambda x: x.str.len()).reset_index(drop=True)
+    cleaned_msgs = []
+    seen = set()
+    for msg in raw_msgs:
+        cleaned = clean_and_validate_message(msg, label_val=label_val)
+        if cleaned is not None and cleaned not in seen:
+            seen.add(cleaned)
+            cleaned_msgs.append(cleaned)
 
+    df_clean = pd.DataFrame({
+        "message": cleaned_msgs,
+        "label": label_val,
+    })
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     df_clean.to_csv(output_file, index=False, encoding="utf-8")
-    print(f"[INFO] {input_file} -> {output_file} | Исходно: {initial_count}, Осталось: {len(df_clean)}")
+    print(
+        f"[INFO] [Класс {label_val}] {input_file} -> {output_file} | "
+        f"Исходно: {initial_count}, Осталось после очистки: {len(df_clean)}"
+    )
 
 
 if __name__ == "__main__":
-    for inp, out in FILES_TO_CLEAN:
-        process_dataset(inp, out)
+    for inp_path, out_path, lbl in FILES_TO_CLEAN:
+        process_dataset(inp_path, out_path, lbl)

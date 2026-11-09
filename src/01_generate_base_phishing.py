@@ -1,110 +1,121 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Шаг 01: генерация базового пула синтетического фишинга (14 000 строк)
+через локальный Ollama с автоматическим переключением на резервную модель при отказах.
+"""
+
+import argparse
+import json
 import os
 import random
 import re
-from collections import deque
+import string
+from collections import defaultdict, deque
+from pathlib import Path
 
 import ollama
 import pandas as pd
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_NAME = "vikhr-llama3.1-8b"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "scenarios_config.json"
+
+MODEL_NAME = "qwen3:14b"
+FALLBACK_MODEL = "vikhr-llama3.1-8b"
+SEED = 42
+REFUSAL_WINDOW_SIZE = 20
+REFUSAL_RATE_THRESHOLD = 0.65
+MAX_CONSECUTIVE_REFUSALS = 3
 MIN_RESPONSE_LENGTH = 25
+MAX_SAME_PREFIX = 3
+
 REFUSAL_MARKERS = (
     "я не могу", "извините", "как ии", "не могу помочь",
     "мошеннич", "незаконн", "as an ai", "i cannot",
 )
 
-random.seed(42)
-target_count = 14000
-out_dir = os.path.join(PROJECT_ROOT, "data", "interim")
-os.makedirs(out_dir, exist_ok=True)
-progress_file = os.path.join(out_dir, "synthetic_phishing_v1_progress.csv")
+LEN_SHORT = ("короткие", 10, "1-2 предложения (до 150 символов)")
+LEN_MED = ("средние", 4, "3-5 предложений (до 300 символов)")
+LEN_LONG = ("длинные", 2, "развернутый текст (около 600-700 символов)")
 
-SCENARIOS = {
-    "портала Госуслуг": [
-        "необходимость срочно подтвердить данные",
-        "угроза блокировки учетной записи",
-        "уведомление о новом штрафе или задолженности"
-    ],
-    "Центрального Банка (ЦБ РФ) или ФСБ": [
-        "страх уголовной ответственности за перевод средств",
-        "давление авторитетом и требование спасти деньги на безопасном счете"
-    ],
-    "ректора или деканата университета": [
-        "давление авторитетом и угроза отчисления",
-        "срочный запрос на участие в обязательном опросе по ссылке"
-    ],
-    "крупного банка (Сбербанк, Т-Банк, ВТБ)": [
-        "угроза потери денег (подозрительный перевод)",
-        "жадность (одобрен кредит на выгодных условиях)",
-        "жадность (начисление бонусных рублей или кешбэка)"
-    ],
-    "родственника или знакомого": [
-        "просьба срочно дать денег в долг на карту",
-        "сочувствие (просьба проголосовать за ребенка в конкурсе)",
-        "кликбейт (шокирующее фото, 'смотри кто на фото')"
-    ],
-    "городской поликлиники или ЕМИАС": [
-        "необходимость срочно прикрепиться к поликлинике",
-        "угроза аннулирования медицинского полиса"
-    ],
-    "официальной поддержки Telegram": [
-        "угроза удаления аккаунта из-за подозрительной активности",
-        "срочное подтверждение номера телефона"
-    ],
-    "бота с бесплатным Telegram Premium": [
-        "жадность и халява (бесплатная подписка на год)",
-        "срочность (акция заканчивается через час)"
-    ],
-    "бота для знакомств или 18+ контента": [
-        "любопытство (кто-то посмотрел твою анкету)",
-        "переход по ссылке для просмотра скрытых фото"
-    ],
-    "магазина ключей для игр (Steam) или нейросетей": [
-        "жадность (бесплатные ключи или токены для ChatGPT)",
-        "распродажа 90% по секретной ссылке"
-    ]
+DEFAULT_SCENARIOS = {
+    "scenarios": {
+        "службы поддержки онлайн-сервиса": [
+            "необходимость срочно подтвердить учетные данные",
+            "уведомление о подозрительном входе в личный кабинет",
+        ],
+        "службы безопасности финансовой организации": [
+            "предупреждение о нестандартной операции по счету",
+            "запрос подтверждения реквизитов для отмены перевода",
+        ],
+        "администрации учебного заведения": [
+            "срочный запрос на заполнение анкеты по внешней ссылке",
+            "уведомление о перерасчете стипендии или расписания",
+        ],
+        "знакомого или коллеги": [
+            "срочная просьба одолжить небольшую сумму до вечера",
+            "просьба поддержать участника в онлайн-голосовании по ссылке",
+        ],
+    },
+    "emoji_rules": {
+        "службы поддержки онлайн-сервиса": (0.10, "Используй эмодзи-предупреждения (например, ⚠️, 🔴)."),
+        "службы безопасности финансовой организации": (0.15, "Используй 1-2 сдержанных эмодзи, характерных для уведомлений."),
+        "администрации учебного заведения": (0.05, "Минимум эмодзи, официальный тон."),
+        "знакомого или коллеги": (0.30, "Можешь использовать обычные бытовые эмодзи."),
+    },
+    "allowed_lengths": {
+        "службы поддержки онлайн-сервиса": [LEN_SHORT, LEN_SHORT, LEN_MED],
+        "службы безопасности финансовой организации": [LEN_MED, LEN_MED, LEN_LONG],
+        "администрации учебного заведения": [LEN_MED, LEN_MED, LEN_LONG],
+        "знакомого или коллеги": [LEN_SHORT, LEN_SHORT, LEN_MED],
+    },
+    "link_examples": "t.me/secure_bot, vk.cc/hG8d, my-portal-auth.ru",
 }
 
-EMOJI_RULES = {
-    "портала Госуслуг": (0.02, "Пиши СТРОГО БЕЗ эмодзи, сухой канцелярский язык."),
-    "Центрального Банка (ЦБ РФ) или ФСБ": (0.01, "СТРОГО БЕЗ эмодзи. Официальный тон силовых структур."),
-    "ректора или деканата университета": (0.05, "Минимум эмодзи, официальный тон."),
-    "крупного банка (Сбербанк, Т-Банк, ВТБ)": (0.15, "Используй 1-2 сдержанных эмодзи, характерных для рассылок банков."),
-    "родственника или знакомого": (0.30, "Можешь использовать обычные бытовые эмодзи."),
-    "городской поликлиники или ЕМИАС": (0.01, "Пиши СТРОГО БЕЗ эмодзи, как системное уведомление."),
-    "официальной поддержки Telegram": (0.10, "Используй эмодзи-предупреждения (например, ⚠️, 🔴)."),
-    "бота с бесплатным Telegram Premium": (0.80, "Обильно используй яркие, кликбейтные эмодзи (🔥, 🎁, 🎉, ⚡️)."),
-    "бота для знакомств или 18+ контента": (0.90, "Используй много пошлых, игривых и привлекающих внимание эмодзи (🍑, 💦, 🔞, ❤️‍🔥)."),
-    "магазина ключей для игр (Steam) или нейросетей": (0.70, "Используй геймерские и кликбейтные эмодзи (🎮, 🚀, 😱).")
-}
+BAD_STARTS = (
+    "я не могу", "i cannot", "к сожалению", "однако", "извините", "простите",
+    "as an ai", "сгенерированное сообщение", "here is", "here are", "here's",
+    "sure", "certainly", "of course", "below", "the following", "вот ", "конечно",
+    "уважаемый", "уважаемая", "здравствуй",
+    "эти примеры", "эти сообщения", "каждое сообщение", "ниже представлен", "данные примеры",
+)
+BAD_WORDS = ["example", "test", "sample", "insert", "вставь", "[ссылка"]
 
-len_short = ("короткие", 10, "1-2 предложения (до 150 символов)")
-len_med = ("средние", 4, "3-5 предложений (до 300 символов)")
-len_long = ("длинные", 2, "развернутый текст (около 600-700 символов)")
 
-ALLOWED_LENGTHS = {
-    "портала Госуслуг": [len_med, len_med, len_med, len_med, len_long],
-    "Центрального Банка (ЦБ РФ) или ФСБ": [len_med, len_med, len_med, len_med, len_long],
-    "ректора или деканата университета": [len_med, len_med, len_med, len_med, len_long],
-    "крупного банка (Сбербанк, Т-Банк, ВТБ)": [len_med, len_med, len_med, len_med, len_long],
-    "городской поликлиники или ЕМИАС": [len_med],
-    "родственника или знакомого": [len_short, len_short, len_short, len_med],
-    "официальной поддержки Telegram": [len_short, len_short, len_short, len_med],
-    "бота с бесплатным Telegram Premium": [len_short, len_short, len_short, len_short, len_med],
-    "бота для знакомств или 18+ контента": [len_short],
-    "магазина ключей для игр (Steam) или нейросетей": [len_short, len_short, len_short, len_med]
-}
+def load_scenarios(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
+    """Загружает сценарии базового фишинга из внешнего JSON или возвращает DEFAULT_SCENARIOS."""
+    path = Path(config_path)
+    if path.is_file():
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        section = data.get("base_phishing")
+        if section and "scenarios" in section and "emoji_rules" in section and "allowed_lengths" in section:
+            return {
+                "scenarios": {k: list(v) for k, v in section["scenarios"].items()},
+                "emoji_rules": {k: (float(v[0]), str(v[1])) for k, v in section["emoji_rules"].items()},
+                "allowed_lengths": {
+                    k: [tuple(item) for item in v]
+                    for k, v in section["allowed_lengths"].items()
+                },
+                "link_examples": section.get("link_examples", DEFAULT_SCENARIOS["link_examples"]),
+            }
+    print(f"[INFO] Конфиг {path} не найден или неполон, используется DEFAULT_SCENARIOS.")
+    return DEFAULT_SCENARIOS
 
-valid_combinations = []
-for sender, tactics in SCENARIOS.items():
-    for tactic in tactics:
-        for length in ALLOWED_LENGTHS[sender]:
-            valid_combinations.append((sender, tactic, length))
 
-random.shuffle(valid_combinations)
+def get_style_instruction(sender: str) -> str:
+    sender_lower = sender.lower()
+    if any(k in sender_lower for k in ("родственник", "знаком", "коллег", "ключ", "нейросет", "чек")):
+        return (
+            "Пиши разговорным языком. Используй сленг (щас, спс, че), "
+            "просторечия и естественные опечатки. Избегай литературности!"
+        )
+    if any(k in sender_lower for k in ("крупного банка", "финансовой организации", "telegram")):
+        return "Пиши как агрессивный маркетолог или бот. Коротко, напористо, с кликбейтом."
+    return "Пиши строгим, сухим канцелярским языком."
 
-def is_refusal(text):
+
+def is_refusal(text: str) -> bool:
     clean_text = text.strip().lower()
     return len(clean_text) < MIN_RESPONSE_LENGTH or any(
         marker in clean_text for marker in REFUSAL_MARKERS
@@ -114,20 +125,21 @@ def is_refusal(text):
 class OllamaGenerator:
     def __init__(self):
         self.current_model = MODEL_NAME
-        # Fallback-логика и счетчики отказов полностью удалены
+        self.refusal_window = deque(maxlen=REFUSAL_WINDOW_SIZE)
+        self.consecutive_refusals = 0
 
-    def generate(self, prompt):
+    def generate(self, prompt: str) -> str:
         try:
             response = ollama.generate(
                 model=self.current_model,
                 prompt=prompt,
                 stream=False,
                 options={
-                    "temperature": 0.75,      # Достаточно для креативности, но без бреда
-                    "top_p": 0.90,            
-                    "top_k": 40,              
-                    "repeat_penalty": 1.05,   # Минимальный штраф, чтобы не ломать русскую грамматику
-                    "num_predict": 200        
+                    "temperature": 0.85,
+                    "top_p": 0.92,
+                    "top_k": 40,
+                    "repeat_penalty": 1.1,
+                    "num_predict": 350,
                 },
             )
             text = response["response"]
@@ -136,107 +148,200 @@ class OllamaGenerator:
             text = ""
 
         refused = is_refusal(text)
-        
-        # Если Qwen отказался, просто возвращаем пустую строку. 
-        # Основной цикл while сам проигнорирует её и попробует сгенерировать заново.
+        self.refusal_window.append(refused)
+        self.consecutive_refusals = self.consecutive_refusals + 1 if refused else 0
+
         if refused:
-            print("[INFO] Qwen выдал отказ (сработала цензура). Повторяем попытку...")
-            
+            print(f"[INFO] {self.current_model} выдал отказ (сработала цензура). Повторяем попытку...")
+
+        rate_exceeded = (
+            len(self.refusal_window) == REFUSAL_WINDOW_SIZE
+            and sum(self.refusal_window) / REFUSAL_WINDOW_SIZE > REFUSAL_RATE_THRESHOLD
+        )
+        if self.current_model == MODEL_NAME and (
+            rate_exceeded or self.consecutive_refusals >= MAX_CONSECUTIVE_REFUSALS
+        ):
+            print(
+                "[WARN] Высокий процент отказов Qwen3-14B (>65%). "
+                "Переключение генератора на VIKHR..."
+            )
+            self.current_model = FALLBACK_MODEL
+            self.consecutive_refusals = 0
+
         return "" if refused else text
 
-if os.path.exists(progress_file):
-    dataset = set(pd.read_csv(progress_file)['message'].tolist())
-    print(f"Загружено {len(dataset)} строк из {progress_file}.")
-else:
+
+def main():
+    parser = argparse.ArgumentParser(description="Шаг 01: генерация базового пула синтетического фишинга")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Путь к внешнему JSON-конфигу со сценариями",
+    )
+    parser.add_argument("--target_count", type=int, default=14000, help="Целевое число сообщений")
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default=os.path.join(PROJECT_ROOT, "data", "interim"),
+        help="Директория сохранения",
+    )
+    args = parser.parse_args()
+
+    random.seed(SEED)
+    target_count = args.target_count
+    out_dir = args.out_dir
+    os.makedirs(out_dir, exist_ok=True)
+    progress_file = os.path.join(out_dir, "synthetic_phishing_v1_progress.csv")
+
+    cfg = load_scenarios(args.config)
+    scenarios = cfg["scenarios"]
+    emoji_rules = cfg["emoji_rules"]
+    allowed_lengths = cfg["allowed_lengths"]
+    link_examples = cfg.get("link_examples", DEFAULT_SCENARIOS["link_examples"])
+
+    valid_combinations = []
+    for sender, tactics in scenarios.items():
+        for tactic in tactics:
+            for length in allowed_lengths.get(sender, [LEN_MED]):
+                valid_combinations.append((sender, tactic, length))
+
+    random.shuffle(valid_combinations)
+
     dataset = set()
+    if os.path.exists(progress_file) and os.path.getsize(progress_file) > 0:
+        try:
+            df_prog = pd.read_csv(progress_file)
+            if "message" in df_prog.columns:
+                dataset = set(df_prog["message"].dropna().astype(str).tolist())
+                print(f"Загружено {len(dataset)} строк из {progress_file}.")
+        except Exception as exc:
+            print(f"[WARN] Не удалось прочитать чекпоинт {progress_file}: {exc}")
 
-combo_idx = 0
-requests_made = 0
-generator = OllamaGenerator()
+    combo_idx = 0
+    requests_made = 0
+    generator = OllamaGenerator()
 
-print(f"Всего доступно уникальных комбинаций промпта: {len(valid_combinations)}")
-print(f"Начинаем генерацию {target_count} сообщений с модели {generator.current_model}...")
+    print(f"Всего доступно уникальных комбинаций промпта: {len(valid_combinations)}")
+    print(f"Начинаем генерацию {target_count} сообщений с модели {generator.current_model}...")
 
-bad_starts = ("я не могу", "i cannot", "к сожалению", "однако", "извините", "простите", "as an ai", "я обязан", "сообщение")
-bad_words = ["example", "test", "sample", "insert", "вставь", "[ссылка"]
+    prefix_counts = defaultdict(int)
+    if len(dataset) > 0:
+        for line in dataset:
+            clean_words = line.translate(str.maketrans("", "", string.punctuation)).lower().split()
+            if len(clean_words) >= 2:
+                pref = f"{clean_words[0]} {clean_words[1]}"
+                prefix_counts[pref] += 1
 
-try:
-    while len(dataset) < target_count:
-        sender, tactic, (length_type, count, length_desc) = valid_combinations[combo_idx]
+    try:
+        while len(dataset) < target_count:
+            sender, tactic, (length_type, count, length_desc) = valid_combinations[combo_idx]
 
-        emoji_chance, emoji_prompt = EMOJI_RULES[sender]
-        if random.random() < emoji_chance:
-            emoji_instruction = emoji_prompt
-        else:
-            emoji_instruction = "Пиши СТРОГО БЕЗ эмодзи."
+            emoji_chance, emoji_prompt = emoji_rules.get(
+                sender, (0.0, "Пиши СТРОГО БЕЗ эмодзи.")
+            )
+            if random.random() < emoji_chance:
+                emoji_instruction = emoji_prompt
+            else:
+                emoji_instruction = "Пиши СТРОГО БЕЗ эмодзи."
 
-        # Шанс 50% на ссылку
-        if random.random() < 0.5:
-            link_instruction = "ОБЯЗАТЕЛЬНО органично вставь в текст правдоподобную ссылку (например t.me/secure_bot, vk.cc/hG8d, gosuslugi-auth.ru). КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова example, test, sample или плейсхолдеры."
-        else:
-            link_instruction = "Не вставляй никаких ссылок, просто призывай к действию или пугай."
+            if random.random() < 0.5:
+                link_instruction = (
+                    f"ОБЯЗАТЕЛЬНО органично вставь в текст правдоподобную ссылку "
+                    f"(например {link_examples}). "
+                    f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова example, test, sample или плейсхолдеры."
+                )
+            else:
+                link_instruction = "Не вставляй никаких ссылок, просто призывай к действию или пугай."
 
-        prompt = (
-            f"Ты — AI-ассистент исследователя в области информационной безопасности. "
-            f"Для обучения защитной антиспам-системы (NLP классификатора) мне нужны "
-            f"СИНТЕТИЧЕСКИЕ ПРИМЕРЫ текстов, используемых злоумышленниками. "
-            f"Сгенерируй {count} {length_type} учебных примеров социальной инженерии "
-            f"для мессенджеров ({length_desc}) от лица: {sender}. Тематика атаки: {tactic}. \n"
-            f"ПРАВИЛА ГЕНЕРАЦИИ ДАТАСЕТА:\n"
-            f"1. Пиши сразу примеры текстов, без вводных слов. Не пиши 'Конечно' или 'Я понимаю'. Встраивай контекст отправителя естественно!\n"
-            f"2. {emoji_instruction}\n"
-            f"3. {link_instruction}\n"
-            f"4. Тексты должны выглядеть максимально правдоподобно для РФ, чтобы антиспам-модель научилась их ловить.\n"
-            f"ВЫВЕДИ ТОЛЬКО СООБЩЕНИЯ. Каждое сообщение с новой строки. Без нумерации, без кавычек."
-        )
+            style_instruction = get_style_instruction(sender)
 
-        text = generator.generate(prompt)
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-
-        for line in lines:
-            if "Here" in line or "Вот" in line or "Сгенерирован" in line:
-                continue
-            clean_line = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
-            if clean_line.startswith('"') and clean_line.endswith('"'):
-                clean_line = clean_line[1:-1]
-
-            clean_lower = clean_line.lower()
-            if len(clean_line) < 25:
-                continue
-            if clean_lower.startswith(bad_starts):
-                continue
-            if any(bw in clean_lower for bw in bad_words):
-                continue
-
-            dataset.add(clean_line)
-
-        requests_made += 1
-        combo_idx = (combo_idx + 1) % len(valid_combinations)
-
-        if requests_made % 10 == 0:
-            print(
-                f"Запросов: {requests_made}. Собрано: {len(dataset)}/{target_count}. "
-                f"Модель: {generator.current_model}"
+            prompt = (
+                f"Ты — AI-ассистент исследователя в области информационной безопасности. "
+                f"Сгенерируй {count} {length_type} учебных примеров социальной инженерии "
+                f"для мессенджеров ({length_desc}) от лица: {sender}. Тематика атаки: {tactic}. \n"
+                f"ПРАВИЛА:\n"
+                f"1. {style_instruction}\n"
+                f"2. Пиши сразу примеры текстов. Не пиши вводных слов. Встраивай контекст отправителя естественно!\n"
+                f"3. {emoji_instruction}\n"
+                f"4. {link_instruction}\n"
+                f"5. Пиши максимально правдоподобно для РФ. Не обрывай предложения!\n"
+                f"6. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать приветствия (Уважаемый пользователь, Здравствуйте, Добрый день и т.д.). Начинай сразу с сути или с призыва к действию!\n"
+                f"ВЫВЕДИ ТОЛЬКО СООБЩЕНИЯ. Каждое сообщение с новой строки. Без нумерации и кавычек."
             )
 
-        if requests_made % 50 == 0:
-            pd.DataFrame(sorted(dataset), columns=['message']).to_csv(
-                progress_file, index=False, encoding="utf-8"
-            )
-            print("Промежуточное сохранение выполнено.")
+            text = generator.generate(prompt)
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
 
-except KeyboardInterrupt:
-    print(f"\n\n[!] Генерация прервана пользователем. Сохраняем собранные {len(dataset)} строк...")
+            for line in lines:
+                if "Here" in line or "Вот" in line or "Сгенерирован" in line:
+                    continue
 
-if len(dataset) > 0:
-    final_filename = os.path.join(out_dir, "raw_synthetic_base.csv")
-    final_list = sorted(dataset)[:target_count]
-    pd.DataFrame(final_list, columns=['message']).to_csv(final_filename, index=False, encoding="utf-8")
-    pd.DataFrame(final_list, columns=['message']).to_csv(progress_file, index=False, encoding="utf-8")
+                clean_line = re.sub(r"^\d+[\.\)]\s*", "", line).strip()
 
-    if len(dataset) >= target_count and os.path.exists(progress_file):
-        os.remove(progress_file)
+                # Жестко отрезаем типичные приветствия LLM в начале строки
+                clean_line = re.sub(
+                    r"^(уважаемый(ая)?\s+пользователь(!|,|\.)?|здравствуйте(!|,|\.)?|добрый\s+день(!|,|\.)?)\s*",
+                    "",
+                    clean_line,
+                    flags=re.IGNORECASE,
+                ).strip()
 
-    print(f"\nГотово! Сгенерировано: {len(final_list)} уникальных сообщений. Файл сохранен как {final_filename}")
-else:
-    print("\nДанных не собрано, сохранять нечего.")
+                if not clean_line:
+                    continue
+
+                if clean_line.startswith('"') and clean_line.endswith('"'):
+                    clean_line = clean_line[1:-1]
+
+                clean_lower = clean_line.lower()
+                if len(clean_line) < 25:
+                    continue
+                if clean_lower.startswith(BAD_STARTS):
+                    continue
+                if any(bw in clean_lower for bw in BAD_WORDS):
+                    continue
+
+                # Трекер одинаковых начал предложений (Bigram Tracker)
+                words_for_prefix = clean_lower.translate(str.maketrans("", "", string.punctuation)).split()
+                if len(words_for_prefix) >= 2:
+                    prefix = f"{words_for_prefix[0]} {words_for_prefix[1]}"
+                    if prefix_counts[prefix] >= MAX_SAME_PREFIX:
+                        continue
+                    prefix_counts[prefix] += 1
+
+                dataset.add(clean_line)
+
+            requests_made += 1
+            combo_idx = (combo_idx + 1) % len(valid_combinations)
+
+            if requests_made % 10 == 0:
+                print(
+                    f"Запросов: {requests_made}. Собрано: {len(dataset)}/{target_count}. "
+                    f"Модель: {generator.current_model}"
+                )
+
+            if requests_made % 50 == 0:
+                pd.DataFrame(sorted(dataset), columns=["message"]).to_csv(
+                    progress_file, index=False, encoding="utf-8"
+                )
+                print("Промежуточное сохранение выполнено.")
+
+    except KeyboardInterrupt:
+        print(f"\n\n[!] Генерация прервана пользователем. Сохраняем собранные {len(dataset)} строк...")
+
+    if len(dataset) > 0:
+        final_filename = os.path.join(out_dir, "raw_synthetic_base.csv")
+        final_list = sorted(dataset)[:target_count]
+        pd.DataFrame(final_list, columns=["message"]).to_csv(final_filename, index=False, encoding="utf-8")
+        pd.DataFrame(final_list, columns=["message"]).to_csv(progress_file, index=False, encoding="utf-8")
+
+        if len(dataset) >= target_count and os.path.exists(progress_file):
+            os.remove(progress_file)
+
+        print(f"\nГотово! Сгенерировано: {len(final_list)} уникальных сообщений. Файл сохранен как {final_filename}")
+    else:
+        print("\nДанных не собрано, сохранять нечего.")
+
+
+if __name__ == "__main__":
+    main()

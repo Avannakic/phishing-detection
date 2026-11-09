@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 05: контролируемая процедурная инжекция реалистичных и тайпсквоттинговых URL
-во все три синтетических класса (Phishing, Spam, Ham) через DynamicURLGenerator
-для предотвращения Feature Leakage.
+Step 05: Controlled procedural injection of realistic and typosquatted URLs
+across all three synthetic classes (Phishing, Spam, Ham) via DynamicURLGenerator
+to prevent feature leakage and superficial link-presence shortcuts.
 """
 
 import os
@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 GLOBAL_SEED = 42
 
-# (входной_файл, выходной_файл, label_val, url_inject_rate)
+# (input_file, output_file, label_val, url_inject_rate)
 URL_INJECTION_CONFIGS = [
     ("merged_synthetic_phishing.csv", "final_synthetic_phishing.csv", 2, 0.65),
     ("dedup_synthetic_spam.csv", "final_synthetic_spam.csv", 1, 0.35),
@@ -26,7 +26,7 @@ URL_INJECTION_CONFIGS = [
 
 
 class DynamicURLGenerator:
-    """Генератор синтетических URL с поддержкой тайпсквоттинга для предотвращения Feature Leakage."""
+    """Synthetic URL generator with typosquatting support to mitigate feature leakage."""
 
     def __init__(self, seed=GLOBAL_SEED):
         self.rng = random.Random(seed)
@@ -88,7 +88,7 @@ class DynamicURLGenerator:
 
 def inject_urls_into_pool(input_path: str, output_path: str, label_val: int, url_inject_rate: float):
     if not os.path.exists(input_path):
-        print(f"[WARN] Файл {input_path} не найден, пропуск.")
+        print(f"[WARN] File {input_path} not found; skipping.")
         return
 
     df = pd.read_csv(input_path)
@@ -115,8 +115,8 @@ def inject_urls_into_pool(input_path: str, output_path: str, label_val: int, url
 
     pct = (injected_count / len(final_msgs) * 100.0) if final_msgs else 0.0
     print(
-        f"[INFO] [Класс {label_val}] {input_path} -> {output_path} | "
-        f"Всего строк: {len(final_msgs)} | URL инжектировано: {injected_count} ({pct:.1f}%)"
+        f"[INFO] [Class {label_val}] {input_path} -> {output_path} | "
+        f"Total rows: {len(final_msgs)} | URLs injected: {injected_count} ({pct:.1f}%)"
     )
 
 

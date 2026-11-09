@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 06: финализация и выравнивание всех шести пулов данных (real + synthetic)
-в data/processed/ с проверкой отсутствия утечек (remove_leakage) между
-синтетическим и реальным фишингом.
+Step 06: Finalisation and alignment of all six data pools (real + synthetic)
+in data/processed/ with strict cross-corpus leakage removal (remove_leakage)
+between synthetic and real phishing.
 """
 
 import os
@@ -26,7 +26,7 @@ TARGET_SYNTH_PHISH_SIZE = 7000
 LEAKAGE_THRESHOLD = 0.75
 SEED = 42
 
-# (входной_файл, входная_директория, выходной_файл, class_id, quota_size)
+# (input_file, input_dir, output_file, class_id, quota_size)
 POOL_CONFIG = [
     ("real_ham.csv", REAL_DIR, "real_ham.csv", 0, TARGET_REAL_BASE_SIZE),
     ("real_spam.csv", REAL_DIR, "real_spam.csv", 1, TARGET_REAL_BASE_SIZE),
@@ -42,12 +42,12 @@ def remove_leakage(
     df_real_phish: pd.DataFrame,
     threshold: float = LEAKAGE_THRESHOLD,
 ) -> pd.DataFrame:
-    print("[INFO] Проверка утечек между синтетикой и всем реальным фишингом...")
+    print("[INFO] Checking for leakage between synthetic and real phishing pools...")
     real_norm = set(df_real_phish["message"].str.casefold().str.strip())
     synth_norm = df_synth["message"].str.casefold().str.strip()
     exact_mask = synth_norm.isin(real_norm)
     df_clean = df_synth[~exact_mask].reset_index(drop=True)
-    print(f"  -> Удалено точных совпадений: {int(exact_mask.sum())}")
+    print(f"  -> Exact duplicates removed: {int(exact_mask.sum())}")
 
     if df_clean.empty or df_real_phish.empty:
         return df_clean
@@ -59,8 +59,8 @@ def remove_leakage(
     max_sim = np.max(sim_matrix, axis=1)
     near_dup_mask = max_sim > threshold
 
-    print(f"  -> Максимальное косинусное сходство TF-IDF: {np.max(max_sim):.4f}")
-    print(f"  -> Удалено нечетких дубликатов (сходство > {threshold}): {int(near_dup_mask.sum())}")
+    print(f"  -> Maximum TF-IDF cosine similarity: {np.max(max_sim):.4f}")
+    print(f"  -> Near-duplicates removed (similarity > {threshold}): {int(near_dup_mask.sum())}")
     return df_clean[~near_dup_mask].reset_index(drop=True)
 
 
@@ -72,14 +72,14 @@ def prepare_and_align_corpus(
     leakage_ref_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
-    Читает корпус из CSV (колонка 'message' или 'text'), нормализует пробелы,
-    выполняет регистронезависимую дедупликацию через .str.casefold(),
-    при необходимости удаляет утечки относительно реального пула и выравнивает по квоте.
+    Read corpus from CSV ('message' or 'text' column), normalize whitespace,
+    perform case-insensitive deduplication via .str.casefold(),
+    remove leakage against real phishing if specified, and align to target quota.
     """
     raw_df = pd.read_csv(csv_path)
     text_col = "message" if "message" in raw_df.columns else "text"
     if text_col not in raw_df.columns:
-        raise KeyError(f"В файле {csv_path} отсутствует колонка 'message' или 'text'.")
+        raise KeyError(f"File {csv_path} lacks a 'message' or 'text' column.")
 
     df = raw_df.dropna(subset=[text_col]).copy()
     df["message"] = (
@@ -98,15 +98,15 @@ def prepare_and_align_corpus(
     df["label"] = class_id
     df = df[["message", "label"]]
 
-    print(f"[INFO] {os.path.basename(csv_path)}: {len(df)} уникальных строк до выравнивания")
+    print(f"[INFO] {os.path.basename(csv_path)}: {len(df)} unique records before alignment")
 
     if leakage_ref_df is not None:
         df = remove_leakage(df, leakage_ref_df, threshold=LEAKAGE_THRESHOLD)
 
     if len(df) < quota_size:
         raise ValueError(
-            f"Корпус {csv_path} содержит {len(df)} уникальных строк после очистки; "
-            f"требуется минимум {quota_size}. Дополните исходные данные или генерацию."
+            f"Corpus {csv_path} contains {len(df)} unique records after cleaning; "
+            f"minimum required is {quota_size}. Expand raw data or generation."
         )
     if len(df) > quota_size:
         df = df.sample(n=quota_size, random_state=rng_seed).reset_index(drop=True)
@@ -141,9 +141,9 @@ def main():
     for _, _, out_name, _, _ in POOL_CONFIG:
         output_path = os.path.join(PROCESSED_DIR, out_name)
         pools[out_name].to_csv(output_path, index=False, encoding="utf-8")
-        print(f"[INFO] Сохранено: {output_path} ({len(pools[out_name])} строк)")
+        print(f"[INFO] Saved: {output_path} ({len(pools[out_name])} records)")
 
-    print("[SUCCESS] Все шесть пулов выровнены; статическое Test-разбиение не выполнялось.")
+    print("[SUCCESS] All six pools aligned; static test splitting was omitted.")
 
 
 if __name__ == "__main__":

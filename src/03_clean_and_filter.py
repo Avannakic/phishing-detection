@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 03: построчная глубокая regex-очистка всех синтетических пулов
-(Phishing Base, Phishing Targeted, Spam, Ham), удаление старых URL,
-мета-комментариев ИИ, приветствий, плейсхолдеров и оборванных концовок.
+Step 03: Deep regex-based line-by-line filtering of synthetic pools
+(Phishing Base, Phishing Targeted, Spam, Ham), removing legacy URLs,
+LLM meta-comments, greetings, placeholders, and truncated sentences.
 """
 
 import os
@@ -15,7 +15,7 @@ import pandas as pd
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 
-# (входной_файл, выходной_файл, label_val)
+# (input_file, output_file, label_val)
 FILES_TO_CLEAN = [
     (
         os.path.join(DATA_DIR, "raw_synthetic_base.csv"),
@@ -39,7 +39,7 @@ FILES_TO_CLEAN = [
     ),
 ]
 
-# 1. Полное вырезание любых существующих (в т.ч. склеенных и Markdown) ссылок перед текстовой очисткой
+# 1. Complete stripping of any pre-existing URLs (including Markdown and concatenated links)
 FULL_URL_STRIP = re.compile(
     r"\[([^\]]+)\]\([^\)]+\)|"
     r"\S*(?:https?://|t\.me/|vk\.cc/|bit\.ly/|clck\.ru/|goo\.gl/|youtu\.be/)\S*|"
@@ -47,12 +47,12 @@ FULL_URL_STRIP = re.compile(
     flags=re.IGNORECASE,
 )
 
-# 2. Индикаторы незаполненных плейсхолдеров LLM и проверка наличия кириллицы
+# 2. Unfilled LLM placeholders and Cyrillic character checks
 PLACEHOLDER_PATTERN = re.compile(r"[\[\]<>{}]|example\.com", flags=re.IGNORECASE)
 BAD_BRACKET_PATTERN = re.compile(r"\[[^\]]*(?:вредоносн|malicious|фишинг)[^\]]*\]", flags=re.IGNORECASE)
 HAS_CYRILLIC = re.compile(r"[а-яёА-ЯЁ]")
 
-# 3. Мета-комментарии языковой модели и обучающие советы по ИБ
+# 3. LLM meta-comments, prompts, and synthetic generation artifacts
 META_PATTERNS = re.compile(
     r"(###|\bпример\w*\s*\d|\bобразец\s*\d|\bпримечание|\bконец\s+примеров|\bот\s+лица\s|"
     r"\bдля\s+учебн|\bсгенерирован|\bсоциальн\w+\s+инженер|\bантиспам|\bзлоумышленник|"
@@ -62,7 +62,7 @@ META_PATTERNS = re.compile(
     flags=re.IGNORECASE,
 )
 
-# 4. Форматирование, приветствия и шапки отправителей
+# 4. Formatting junk, greetings, and sender headers
 LEAD_JUNK = re.compile(r"^[\s\"\'\`\*\#\-\–\—\•\d\.\)\:]+")
 MD_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 
@@ -77,7 +77,7 @@ PREFIX_STRIP = re.compile(
     flags=re.IGNORECASE,
 )
 
-# 5. Оборванные на полуслове или предлоге фразы (проверяется ПОСЛЕ удаления URL)
+# 5. Truncated sentence endings (evaluated after URL stripping)
 TRUNCATED_END = re.compile(
     r"(\b(и|в|на|с|по|для|от|к|о|из|за|при|до|без|через|или|что|как|но|а|причём|также|ин|зад|об|провер)|[,:;—\-])\s*$",
     flags=re.IGNORECASE,
@@ -103,7 +103,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
     if not raw_stripped:
         return None
 
-    # 1. Отсев мета-комментариев ИИ, плейсхолдеров example.com и вредоносных скобочных меток
+    # 1. Filter out LLM meta-comments, example.com placeholders, and bracketed malicious labels
     if (
         META_PATTERNS.search(raw_stripped)
         or BAD_BRACKET_PATTERN.search(raw_stripped)
@@ -111,7 +111,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
     ):
         return None
 
-    # 2. Снятие жирного Markdown-форматирования и полное вырезание старых ссылок
+    # 2. Strip Markdown bold formatting and remove pre-existing URLs
     line = MD_BOLD.sub(r"\1", raw_stripped).strip()
     if not line or line.startswith("*"):
         return None
@@ -119,7 +119,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
     had_url = bool(FULL_URL_STRIP.search(line))
     line = FULL_URL_STRIP.sub("", line)
 
-    # 3. Проверка плейсхолдеров, баланса языков и стоп-слов после удаления URL
+    # 3. Validate placeholders, language balance, and stop-words after URL stripping
     if PLACEHOLDER_PATTERN.search(line) or BAD_BRACKET_PATTERN.search(line) or not HAS_CYRILLIC.search(line):
         return None
 
@@ -136,7 +136,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
         if "емиас" in line_lower_pre or line_lower_pre.startswith(BAD_STARTS):
             return None
 
-    # 4. Очистка мусорных префиксов, кавычек, приветствий и шапок отправителей
+    # 4. Clean prefix junk, quotes, greetings, and sender headers
     line = LEAD_JUNK.sub("", line).strip()
     if (line.startswith('"') and line.endswith('"')) or (line.startswith("'") and line.endswith("'")):
         line = line[1:-1].strip()
@@ -160,11 +160,13 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
         if "емиас" in clean_lower or clean_lower.startswith(BAD_STARTS):
             return None
 
-    if len(line) < 25 or TRUNCATED_END.search(line):
+    min_len = 16 if label_val == 0 else 25
+    if len(line) < min_len or TRUNCATED_END.search(line):
         return None
 
     words = re.findall(r"[а-яёa-z0-9]+", clean_lower)
-    if len(words) < 4:
+    min_words = 2 if label_val == 0 else 4
+    if len(words) < min_words:
         return None
 
     if line[0].islower() and line[0].isalpha():
@@ -175,7 +177,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
 
 def process_dataset(input_file: str, output_file: str, label_val: int):
     if not os.path.exists(input_file):
-        print(f"[WARN] Файл {input_file} не найден, пропуск.")
+        print(f"[WARN] File {input_file} not found; skipping.")
         return
 
     df = pd.read_csv(input_file)
@@ -198,8 +200,8 @@ def process_dataset(input_file: str, output_file: str, label_val: int):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     df_clean.to_csv(output_file, index=False, encoding="utf-8")
     print(
-        f"[INFO] [Класс {label_val}] {input_file} -> {output_file} | "
-        f"Исходно: {initial_count}, Осталось после очистки: {len(df_clean)}"
+        f"[INFO] [Class {label_val}] {input_file} -> {output_file} | "
+        f"Initial: {initial_count}, Cleaned: {len(df_clean)}"
     )
 
 

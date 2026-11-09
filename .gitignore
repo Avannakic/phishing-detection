@@ -1,23 +1,24 @@
-# Виртуальные окружения
+# Virtual environments
 .venv/
 venv/
 env/
 
-# Кэш Python
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# Данные и CSV-датасеты
+# Data and CSV datasets
 data/interim/*
 data/processed/*
 *.csv
 
-# Артефакты обучения моделей и чекпоинты HuggingFace Trainer
+# Model checkpoints and training artifacts
 results/
 results_part1/
 results_part2/
+saved_best_models/
 checkpoint-*/
 runs/
 wandb/
@@ -27,13 +28,17 @@ wandb/
 *.safetensors
 *.onnx
 
-# IDE и редакторы
+# Local configuration overrides
+configs/*.local.json
+configs/local_*.json
+
+# IDEs and editors
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Системные файлы ОС
+# Operating system artifacts
 .DS_Store
 .DS_Store?
 ._*
@@ -42,5 +47,6 @@ wandb/
 ehthumbs.db
 Thumbs.db
 
-# Локальные инструкции для AI-агентов
+# Local AI agent instructions
 AGENTS.md
+agents.md

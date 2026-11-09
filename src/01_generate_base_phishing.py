@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 01: генерация базового пула синтетического фишинга (14 000 строк)
-через локальный Ollama с автоматическим переключением на резервную модель при отказах.
+Step 01: Generation of baseline synthetic phishing pool (14,000 records)
+via local Ollama with automatic fallback mechanism upon model refusals.
 """
 
 import argparse
@@ -83,7 +83,7 @@ BAD_WORDS = ["example", "test", "sample", "insert", "вставь", "[ссылк
 
 
 def load_scenarios(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
-    """Загружает сценарии базового фишинга из внешнего JSON или возвращает DEFAULT_SCENARIOS."""
+    """Load baseline phishing scenarios from external JSON or return DEFAULT_SCENARIOS."""
     path = Path(config_path)
     if path.is_file():
         with open(path, "r", encoding="utf-8") as f:
@@ -99,7 +99,7 @@ def load_scenarios(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
                 },
                 "link_examples": section.get("link_examples", DEFAULT_SCENARIOS["link_examples"]),
             }
-    print(f"[INFO] Конфиг {path} не найден или неполон, используется DEFAULT_SCENARIOS.")
+    print(f"[INFO] Configuration file {path} not found or incomplete; using DEFAULT_SCENARIOS.")
     return DEFAULT_SCENARIOS
 
 
@@ -144,7 +144,7 @@ class OllamaGenerator:
             )
             text = response["response"]
         except Exception as exc:
-            print(f"[Ошибка Ollama, {self.current_model}]: {exc}")
+            print(f"[Ollama error, {self.current_model}]: {exc}")
             text = ""
 
         refused = is_refusal(text)
@@ -152,7 +152,7 @@ class OllamaGenerator:
         self.consecutive_refusals = self.consecutive_refusals + 1 if refused else 0
 
         if refused:
-            print(f"[INFO] {self.current_model} выдал отказ (сработала цензура). Повторяем попытку...")
+            print(f"[INFO] {self.current_model} returned refusal/moderation block. Retrying...")
 
         rate_exceeded = (
             len(self.refusal_window) == REFUSAL_WINDOW_SIZE
@@ -162,8 +162,8 @@ class OllamaGenerator:
             rate_exceeded or self.consecutive_refusals >= MAX_CONSECUTIVE_REFUSALS
         ):
             print(
-                "[WARN] Высокий процент отказов Qwen3-14B (>65%). "
-                "Переключение генератора на VIKHR..."
+                "[WARN] High refusal rate for Qwen3-14B (>65%). "
+                "Switching generation engine to VIKHR..."
             )
             self.current_model = FALLBACK_MODEL
             self.consecutive_refusals = 0
@@ -172,19 +172,19 @@ class OllamaGenerator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Шаг 01: генерация базового пула синтетического фишинга")
+    parser = argparse.ArgumentParser(description="Step 01: Generation of baseline synthetic phishing pool")
     parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help="Путь к внешнему JSON-конфигу со сценариями",
+        help="Path to external JSON configuration file with scenarios",
     )
-    parser.add_argument("--target_count", type=int, default=14000, help="Целевое число сообщений")
+    parser.add_argument("--target_count", type=int, default=14000, help="Target count of messages")
     parser.add_argument(
         "--out_dir",
         type=str,
         default=os.path.join(PROJECT_ROOT, "data", "interim"),
-        help="Директория сохранения",
+        help="Output directory for generated datasets",
     )
     args = parser.parse_args()
 
@@ -214,16 +214,16 @@ def main():
             df_prog = pd.read_csv(progress_file)
             if "message" in df_prog.columns:
                 dataset = set(df_prog["message"].dropna().astype(str).tolist())
-                print(f"Загружено {len(dataset)} строк из {progress_file}.")
+                print(f"Loaded {len(dataset)} records from {progress_file}.")
         except Exception as exc:
-            print(f"[WARN] Не удалось прочитать чекпоинт {progress_file}: {exc}")
+            print(f"[WARN] Failed to read checkpoint {progress_file}: {exc}")
 
     combo_idx = 0
     requests_made = 0
     generator = OllamaGenerator()
 
-    print(f"Всего доступно уникальных комбинаций промпта: {len(valid_combinations)}")
-    print(f"Начинаем генерацию {target_count} сообщений с модели {generator.current_model}...")
+    print(f"Total available unique prompt combinations: {len(valid_combinations)}")
+    print(f"Starting generation of {target_count} messages using model {generator.current_model}...")
 
     prefix_counts = defaultdict(int)
     if len(dataset) > 0:
@@ -279,7 +279,7 @@ def main():
 
                 clean_line = re.sub(r"^\d+[\.\)]\s*", "", line).strip()
 
-                # Жестко отрезаем типичные приветствия LLM в начале строки
+                # Strip typical LLM greetings at line start
                 clean_line = re.sub(
                     r"^(уважаемый(ая)?\s+пользователь(!|,|\.)?|здравствуйте(!|,|\.)?|добрый\s+день(!|,|\.)?)\s*",
                     "",
@@ -301,7 +301,7 @@ def main():
                 if any(bw in clean_lower for bw in BAD_WORDS):
                     continue
 
-                # Трекер одинаковых начал предложений (Bigram Tracker)
+                # Bigram prefix tracking for lexical diversity
                 words_for_prefix = clean_lower.translate(str.maketrans("", "", string.punctuation)).split()
                 if len(words_for_prefix) >= 2:
                     prefix = f"{words_for_prefix[0]} {words_for_prefix[1]}"
@@ -316,18 +316,18 @@ def main():
 
             if requests_made % 10 == 0:
                 print(
-                    f"Запросов: {requests_made}. Собрано: {len(dataset)}/{target_count}. "
-                    f"Модель: {generator.current_model}"
+                    f"Requests: {requests_made} | Collected: {len(dataset)}/{target_count} | "
+                    f"Model: {generator.current_model}"
                 )
 
             if requests_made % 50 == 0:
                 pd.DataFrame(sorted(dataset), columns=["message"]).to_csv(
                     progress_file, index=False, encoding="utf-8"
                 )
-                print("Промежуточное сохранение выполнено.")
+                print("Periodic checkpoint saved.")
 
     except KeyboardInterrupt:
-        print(f"\n\n[!] Генерация прервана пользователем. Сохраняем собранные {len(dataset)} строк...")
+        print(f"\n\n[!] Generation interrupted by user. Saving collected {len(dataset)} records...")
 
     if len(dataset) > 0:
         final_filename = os.path.join(out_dir, "raw_synthetic_base.csv")
@@ -338,9 +338,9 @@ def main():
         if len(dataset) >= target_count and os.path.exists(progress_file):
             os.remove(progress_file)
 
-        print(f"\nГотово! Сгенерировано: {len(final_list)} уникальных сообщений. Файл сохранен как {final_filename}")
+        print(f"\nDone! Generated: {len(final_list)} unique messages. Saved to {final_filename}")
     else:
-        print("\nДанных не собрано, сохранять нечего.")
+        print("\nNo data collected; nothing to save.")
 
 
 if __name__ == "__main__":

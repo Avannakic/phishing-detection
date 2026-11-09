@@ -1,4 +1,6 @@
-"""Последовательный запуск этапов подготовки данных и, по запросу, обучения."""
+"""
+Sequential pipeline orchestrator for data generation, preprocessing, model fine-tuning, and evaluation.
+"""
 
 import argparse
 import subprocess
@@ -17,62 +19,74 @@ PROCESSING_STEPS = [
     "05_procedural_urls.py",
     "06_finalise_datasets.py",
 ]
-TRAINING_STEP = "07_train_rubert_and_results.py"
-FEW_SHOT_STEP = "08_llm_few_shot_cv.py"
+TRAINING_STEP = "07_train_and_eval_all.py"
 
 
-def run_step(script_path: Path):
-    print(f"\n>>> ЗАПУСК: {script_path.name}")
-    result = subprocess.run(
-        [sys.executable, str(script_path)], cwd=PROJECT_ROOT, check=False
-    )
+def run_step(script_path: Path, extra_args=None):
+    """Executes a pipeline step in a subprocess with working directory at PROJECT_ROOT."""
+    cmd = [sys.executable, str(script_path)]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd_str = f"{script_path.name}" + (f" {' '.join(extra_args)}" if extra_args else "")
+    print(f"\n>>> RUNNING: {cmd_str}")
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, check=False)
     if result.returncode != 0:
         print(
-            f"[ERROR] Скрипт {script_path.name} завершился с ошибкой "
-            f"(код {result.returncode}). Остановка пайплайна."
+            f"[ERROR] Script {script_path.name} terminated with error "
+            f"(exit code {result.returncode}). Pipeline aborted."
         )
         sys.exit(result.returncode)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Оркестратор исследовательского пайплайна")
+    parser = argparse.ArgumentParser(description="Research pipeline master orchestrator")
     parser.add_argument(
         "--include-generation",
         action="store_true",
-        help="Включить долгие шаги генерации 00–02 через Ollama",
+        help="Include synthetic generation steps 00-02 via Ollama",
     )
     parser.add_argument(
         "--include-training",
         action="store_true",
-        help="После подготовки данных запустить обучение всех моделей (шаг 07)",
+        help="Run model fine-tuning after preprocessing (step 07)",
     )
     parser.add_argument(
         "--include-few-shot",
         action="store_true",
-        help="После подготовки данных запустить Few-Shot оценку (шаг 08)",
+        help="Run Few-Shot evaluation after preprocessing (step 07)",
     )
-    parser.add_argument("--scripts-dir", default="src", help="Папка со скриптами пайплайна")
+    parser.add_argument("--scripts-dir", default="src", help="Path to directory containing pipeline scripts")
     args = parser.parse_args()
 
     scripts_dir = Path(args.scripts_dir)
     if not scripts_dir.is_absolute():
         scripts_dir = PROJECT_ROOT / scripts_dir
+
     steps = []
     if args.include_generation:
         steps.extend(GENERATION_STEPS)
     steps.extend(PROCESSING_STEPS)
-    if args.include_training:
-        steps.append(TRAINING_STEP)
-    if args.include_few_shot:
-        steps.append(FEW_SHOT_STEP)
 
-    print(f"Старт пайплайна. Всего шагов: {len(steps)}")
+    print(f"Starting pipeline execution. Total preprocessing steps: {len(steps)}")
     for script_name in steps:
         script_path = scripts_dir / script_name
         if not script_path.is_file():
-            raise FileNotFoundError(f"Скрипт не найден: {script_path}")
+            raise FileNotFoundError(f"Script not found: {script_path}")
         run_step(script_path)
-    print("\n[SUCCESS] Все выбранные этапы выполнены.")
+
+    if args.include_training or args.include_few_shot:
+        train_script = scripts_dir / TRAINING_STEP
+        if not train_script.is_file():
+            raise FileNotFoundError(f"Training script not found: {train_script}")
+
+        if args.include_training and args.include_few_shot:
+            run_step(train_script)
+        elif args.include_training:
+            run_step(train_script, ["--skip-few-shot"])
+        elif args.include_few_shot:
+            run_step(train_script, ["--skip-training"])
+
+    print("\n[SUCCESS] All selected pipeline stages completed successfully.")
 
 
 if __name__ == "__main__":

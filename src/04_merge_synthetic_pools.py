@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 04: слияние базового и целевого пулов синтетического фишинга,
-межклассовая буквенно-цифровая дедупликация (Phishing -> Spam -> Ham),
-фильтрация по частотам N-грамм и батчевая семантическая дедупликация TF-IDF.
+Step 04: Merging baseline and targeted synthetic phishing pools,
+cross-class alphanumeric deduplication (Phishing -> Spam -> Ham),
+n-gram frequency filtering, and batched TF-IDF semantic deduplication.
 """
 
 from collections import Counter
@@ -18,7 +18,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "interim")
 GLOBAL_SEED = 42
 
-# Параметры дедупликации по классам:
+# Class-specific deduplication configuration:
 # (label_val, max_first_word, max_bigram_prefix, max_trigram, sim_thresh, output_filename)
 CLASS_DEDUP_CONFIGS = [
     (2, 40, 3, 25, 0.65, "merged_synthetic_phishing.csv"),
@@ -29,7 +29,7 @@ CLASS_DEDUP_CONFIGS = [
 
 def load_messages(filepath: str) -> list:
     if not os.path.exists(filepath):
-        print(f"[WARN] Файл {filepath} не найден, возвращен пустой список.")
+        print(f"[WARN] File {filepath} not found; returning empty list.")
         return []
     df = pd.read_csv(filepath)
     col = "message" if "message" in df.columns else "text"
@@ -48,11 +48,12 @@ def deduplicate_class_pool(
 ) -> pd.DataFrame:
     rng = np.random.default_rng(GLOBAL_SEED + label_val)
 
-    # Этап 1: Межклассовая буквенно-цифровая дедупликация
+    # Stage 1: Cross-class alphanumeric deduplication
+    min_words = 2 if label_val == 0 else 4
     stage1 = []
     for line in raw_msgs:
         words = re.findall(r"[а-яёa-z0-9]+", line.lower())
-        if len(words) < 4:
+        if len(words) < min_words:
             continue
         alpha_norm = " ".join(words)
         if alpha_norm in global_seen_norms:
@@ -62,7 +63,7 @@ def deduplicate_class_pool(
 
     rng.shuffle(stage1)
 
-    # Этап 2: Фильтрация по частотам N-грамм (1-грамма начала, 2-грамма начала, 3-грамма внутри текста)
+    # Stage 2: N-gram frequency filtering (prefix unigram, prefix bigram, internal trigram)
     stage2 = []
     fw_counts = Counter()
     bp_counts = Counter()
@@ -70,7 +71,7 @@ def deduplicate_class_pool(
 
     for line in stage1:
         words = re.findall(r"[а-яёa-z0-9]+", line.lower())
-        if len(words) < 4:
+        if len(words) < min_words:
             continue
         fw = words[0]
         bp = f"{words[0]} {words[1]}"
@@ -88,7 +89,7 @@ def deduplicate_class_pool(
             tg_counts[tg] += 1
         stage2.append(line)
 
-    # Этап 3: Батчевая семантическая дедупликация TF-IDF по чистому тексту без ссылок
+    # Stage 3: Batched TF-IDF semantic deduplication on URL-stripped text
     if len(stage2) >= 2:
         vec = TfidfVectorizer(
             analyzer="char_wb",
@@ -136,9 +137,9 @@ def deduplicate_class_pool(
     out_df.to_csv(output_path, index=False, encoding="utf-8")
 
     print(
-        f"[Класс {label_val}] -> {output_path}\n"
-        f"  Входных: {len(raw_msgs)} | Этап 1 (Alpha-Dedup): {len(stage1)} | "
-        f"Этап 2 (N-grams): {len(stage2)} | Этап 3 (TF-IDF): {len(final_msgs)}"
+        f"[Class {label_val}] -> {output_path}\n"
+        f"  Input: {len(raw_msgs)} | Stage 1 (Alpha-Dedup): {len(stage1)} | "
+        f"Stage 2 (N-grams): {len(stage2)} | Stage 3 (TF-IDF): {len(final_msgs)}"
     )
     return out_df
 
@@ -149,7 +150,7 @@ def main():
     spam_path = os.path.join(DATA_DIR, "cleaned_synthetic_spam.csv")
     ham_path = os.path.join(DATA_DIR, "cleaned_synthetic_ham.csv")
 
-    print("[INFO] Загрузка очищенных датасетов из data/interim/...")
+    print("[INFO] Loading cleaned datasets from data/interim/...")
     phishing_msgs = load_messages(base_phishing_path) + load_messages(targeted_phishing_path)
     spam_msgs = load_messages(spam_path)
     ham_msgs = load_messages(ham_path)
@@ -164,7 +165,7 @@ def main():
     for label_val, max_fw, max_bp, max_tg, sim_thresh, out_name in CLASS_DEDUP_CONFIGS:
         msgs = pools_by_label[label_val]
         if not msgs:
-            print(f"[WARN] Пул класса {label_val} пуст, пропуск.")
+            print(f"[WARN] Class pool {label_val} is empty; skipping.")
             continue
         out_path = os.path.join(DATA_DIR, out_name)
         deduplicate_class_pool(

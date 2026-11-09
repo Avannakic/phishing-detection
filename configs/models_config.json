@@ -1,0 +1,77 @@
+{
+  "defaults": {
+    "encoder": {
+      "type": "encoder",
+      "epochs": 3,
+      "learning_rate": 2e-5,
+      "train_batch_size": 64,
+      "eval_batch_size": 128,
+      "grad_accum": 1,
+      "max_length": 128,
+      "optim": "adamw_torch_fused",
+      "grad_ckpt": false,
+      "supports_train_eval": true,
+      "supports_few_shot": false,
+      "needs_vram_worker_reset": false
+    },
+    "llm_lora": {
+      "type": "llm_lora",
+      "epochs": 2,
+      "learning_rate": 1e-4,
+      "train_batch_size": 32,
+      "eval_batch_size": 64,
+      "grad_accum": 2,
+      "max_length": 128,
+      "optim": "paged_adamw_8bit",
+      "grad_ckpt": false,
+      "supports_train_eval": true,
+      "supports_few_shot": true,
+      "needs_vram_worker_reset": true,
+      "few_shot_batch_size": 32,
+      "few_shot_max_new_tokens": 8,
+      "max_prompt_length": 2048,
+      "enable_thinking": false,
+      "quantization": {
+        "load_in_4bit": true,
+        "bnb_4bit_quant_type": "nf4",
+        "bnb_4bit_use_double_quant": true
+      },
+      "lora": {
+        "r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.05,
+        "bias": "none",
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+        "modules_to_save": ["score"]
+      }
+    }
+  },
+  "models": {
+    "Vikhr-8B": {
+      "enabled": true,
+      "model_id": "Vikhrmodels/Vikhr-Llama3.1-8B-Instruct-R-21-09-24",
+      "type": "llm_lora"
+    },
+    "RuBERT": {
+      "enabled": true,
+      "model_id": "DeepPavlov/rubert-base-cased",
+      "type": "encoder"
+    },
+    "RuRoBERTa-large": {
+      "enabled": true,
+      "model_id": "ai-forever/ruRoberta-large",
+      "type": "encoder",
+      "learning_rate": 1.5e-5
+    },
+    "Qwen3-14B": {
+      "enabled": false,
+      "model_id": "Qwen/Qwen3-14B",
+      "type": "llm_lora",
+      "train_batch_size": 16,
+      "eval_batch_size": 32,
+      "grad_accum": 4,
+      "enable_thinking": false
+    }
+  }
+}
+

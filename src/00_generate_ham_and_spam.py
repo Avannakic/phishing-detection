@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Шаг 00: генерация синтетических фоновых классов 0 (Ham) и 1 (Spam)
-через локальный Ollama с автоматическим fallback при отказах Qwen3.
+Step 00: Generation of synthetic background classes 0 (Ham) and 1 (Spam)
+via local Ollama with automatic fallback mechanism upon model refusals.
 """
 
 import argparse
@@ -57,7 +57,7 @@ DEFAULT_SCENARIOS = {
             ),
         ],
         "lengths": [
-            ("короткие", 7, "1-2 слова или одно короткое предложение (от 10 до 50 символов)", False),
+            ("короткие", 7, "1-2 слова или одно короткое предложение (от 16 до 50 символов)", False),
             ("средние", 5, "1-2 полных предложения (до 150 символов)", False),
             ("длинные", 2, "развернутое сообщение с объяснением ситуации (около 300-500 символов)", True),
         ],
@@ -116,7 +116,7 @@ BAD_STARTS = ("я не ", "к сожалению", "вот ", "конечно", 
 
 
 def load_scenarios(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
-    """Загружает конфигурацию сценариев из внешнего JSON или возвращает DEFAULT_SCENARIOS."""
+    """Load scenario configuration from external JSON or return DEFAULT_SCENARIOS."""
     path = Path(config_path)
     if path.is_file():
         with open(path, "r", encoding="utf-8") as f:
@@ -146,7 +146,7 @@ def load_scenarios(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
                     ),
                 },
             }
-    print(f"[INFO] Конфиг {path} не найден или неполон, используется DEFAULT_SCENARIOS.")
+    print(f"[INFO] Configuration file {path} not found or incomplete; using DEFAULT_SCENARIOS.")
     return DEFAULT_SCENARIOS
 
 
@@ -173,7 +173,7 @@ class OllamaGenerator:
             )
             text = response["response"]
         except Exception as exc:
-            print(f"[Ошибка Ollama, {self.current_model}]: {exc}")
+            print(f"[Ollama error, {self.current_model}]: {exc}")
             text = ""
 
         refused = is_refusal(text)
@@ -188,8 +188,8 @@ class OllamaGenerator:
             rate_exceeded or self.consecutive_refusals >= MAX_CONSECUTIVE_REFUSALS
         ):
             print(
-                "[WARN] Высокий процент отказов Qwen3-14B (>65%). "
-                "Переключение генератора на VIKHR..."
+                "[WARN] High refusal rate for Qwen3-14B (>65%). "
+                "Switching generator engine to VIKHR..."
             )
             self.current_model = FALLBACK_MODEL
             self.consecutive_refusals = 0
@@ -274,15 +274,15 @@ def generate_class_corpus(
             df_prog = pd.read_csv(progress_path)
             if "message" in df_prog.columns:
                 dataset = set(df_prog["message"].dropna().astype(str).to_list())
-                print(f"[{class_name}] Загружено {len(dataset)} строк из чекпоинта {progress_path}")
+                print(f"[{class_name}] Loaded {len(dataset)} records from checkpoint {progress_path}")
         except Exception as exc:
-            print(f"[WARN] Не удалось прочитать чекпоинт {progress_path}: {exc}")
+            print(f"[WARN] Failed to read checkpoint {progress_path}: {exc}")
 
     requests_made = 0
     generator = OllamaGenerator()
     print(
-        f"[{class_name}] Старт генерации (цель: {target_count} уникальных сообщений, "
-        f"модель: {generator.current_model})..."
+        f"[{class_name}] Starting generation (target: {target_count} unique messages, "
+        f"model: {generator.current_model})..."
     )
 
     try:
@@ -324,8 +324,8 @@ def generate_class_corpus(
             requests_made += 1
             if requests_made % 10 == 0:
                 print(
-                    f"[{class_name}] Запросов: {requests_made} | "
-                    f"Собрано: {len(dataset)}/{target_count} | Модель: {generator.current_model}"
+                    f"[{class_name}] Requests: {requests_made} | "
+                    f"Collected: {len(dataset)}/{target_count} | Model: {generator.current_model}"
                 )
 
             if requests_made % 100 == 0:
@@ -334,7 +334,7 @@ def generate_class_corpus(
                 )
 
     except KeyboardInterrupt:
-        print(f"\n[{class_name}] Прервано пользователем. Сохраняем накопленные {len(dataset)} строк...")
+        print(f"\n[{class_name}] Interrupted by user. Saving collected {len(dataset)} records...")
 
     if len(dataset) > 0:
         final_list = sorted(dataset)[:target_count]
@@ -347,26 +347,26 @@ def generate_class_corpus(
         df_out.to_csv(output_path, index=False, encoding="utf-8")
         if len(dataset) >= target_count and os.path.exists(progress_path):
             os.remove(progress_path)
-        print(f"[{class_name}] Готово! Сохранено {len(df_out)} строк в {output_path}\n")
+        print(f"[{class_name}] Complete! Saved {len(df_out)} records to {output_path}\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Генерация синтетических классов Ham (0) и Spam (1)")
+    parser = argparse.ArgumentParser(description="Step 00: Generate synthetic background classes Ham (0) and Spam (1)")
     parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_CONFIG_PATH,
-        help="Путь к внешнему JSON-конфигу со сценариями",
+        help="Path to external JSON configuration file with scenarios",
     )
-    parser.add_argument("--target_ham", type=int, default=14000, help="Целевое число сообщений Ham")
-    parser.add_argument("--target_spam", type=int, default=14000, help="Целевое число сообщений Spam")
+    parser.add_argument("--target_ham", type=int, default=14000, help="Target count of Ham messages")
+    parser.add_argument("--target_spam", type=int, default=14000, help="Target count of Spam messages")
     parser.add_argument(
         "--out_dir",
         type=str,
         default=os.path.join(PROJECT_ROOT, "data", "interim"),
-        help="Директория сохранения",
+        help="Output directory for generated datasets",
     )
-    parser.add_argument("--mode", choices=["all", "ham", "spam"], default="all", help="Какой класс генерировать")
+    parser.add_argument("--mode", choices=["all", "ham", "spam"], default="all", help="Target class to generate")
     args = parser.parse_args()
 
     scenarios_cfg = load_scenarios(args.config)

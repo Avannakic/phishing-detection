@@ -1,4 +1,4 @@
-# Russian Phishing Detection: Synthetic Data Generation, QLoRA, and Few-Shot Evaluation
+# Russian Phishing Detection: Synthetic Data Generation, Encoder Transformers, and QLoRA / Few-Shot LLMs
 
 A research pipeline for classifying Russian-language messenger messages into three mutually exclusive categories:
 

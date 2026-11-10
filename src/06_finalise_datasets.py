@@ -52,7 +52,7 @@ def remove_leakage(
     if df_clean.empty or df_real_phish.empty:
         return df_clean
 
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=1)
+    vectorizer = TfidfVectorizer(ngram_range=(1, 3), min_df=1)
     tfidf_real = vectorizer.fit_transform(df_real_phish["message"].tolist())
     tfidf_synth = vectorizer.transform(df_clean["message"].tolist())
     sim_matrix = cosine_similarity(tfidf_synth, tfidf_real)

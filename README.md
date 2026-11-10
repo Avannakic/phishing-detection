@@ -59,7 +59,7 @@ Manages prompts, topics, length distributions, and guardrails for Steps 00, 01, 
 
 ### 2.2. Model & Routing Config: [`configs/models_config.json`](configs/models_config.json)
 
-Manages architectures, optimization hyperparameters, quantization, and LoRA adapters for Steps 07 and `test.py` (overrideable via `--models-config`). 
+Manages architectures, optimization hyperparameters, quantization, and LoRA adapters for Step 07 and model configurations (overrideable via `--models-config`). 
 
 The following snippet illustrates the configuration structure and usage pattern:
 
@@ -155,7 +155,10 @@ The following snippet illustrates the configuration structure and usage pattern:
 │   ├── 05_procedural_urls.py         # Procedural URL injection (prevents URL-leakage)
 │   ├── 06_finalise_datasets.py       # Pool balancing, leakage purge against real phishing
 │   ├── 07_train_and_eval_all.py      # Unified 5-fold CV (BERT, LoRA) and Few-Shot evaluation
-│   └── test.py                       # Standalone re-validation of saved best checkpoints
+│   └── eval_saved_models.py          # Standalone re-validation of saved best checkpoints
+├── tests/
+│   ├── __init__.py
+│   └── test_pipeline.py              # Automated 6-block unit and regression test suite
 └── run_pipeline.py                   # Master pipeline orchestrator
 ```
 
@@ -214,7 +217,7 @@ The following snippet illustrates the configuration structure and usage pattern:
 - Few-Shot prompt parsing with `<think>` tag stripping and recursive batch halving under memory pressure.
 - Output: `results/ALL_FOLDS_RAW.csv`, `results/FINAL_SUMMARY_METRICS.csv`, `results/predictions/`, `saved_best_models/`.
 
-#### Step 08 / Re-validation: `src/test.py`
+#### Step 08 / Re-validation: `src/eval_saved_models.py`
 - Independent re-evaluation of optimal checkpoints from `saved_best_models/`.
 - Universal architecture routing (`encoder` vs `llm_lora`) without hardcoded model names.
 - Output: `results/REEVAL_BEST_FOLD_METRICS.csv`.
@@ -285,10 +288,10 @@ python src/07_train_and_eval_all.py --dry-run
 
 ```bash
 # Re-validate all saved checkpoints from saved_best_models/
-python src/test.py
+python src/eval_saved_models.py
 
 # Re-validate specific model and configuration
-python src/test.py --models Vikhr-8B --configs 1_Baseline_Imbalanced
+python src/eval_saved_models.py --models Vikhr-8B --configs 1_Baseline_Imbalanced
 ```
 
 ---
@@ -314,17 +317,21 @@ ollama pull vikhr-llama3.1-8b
 
 1. **Static Syntax & Bytecode Compilation**:
    ```bash
-   python -m compileall -q run_pipeline.py src
+   python -m compileall -q run_pipeline.py src tests
    ```
 
 2. **Automated Unit & Integration Test Suite**:
+   Execute the 6-block test suite covering data invariants, preprocessing regexes, model architectures, and error handling:
+   ```bash
+   python -m unittest discover tests -v
+   ```
    The test suite systematically verifies all 6 blocks of edge cases in an isolated temporary environment:
    - **Block 1**: AST code audit verifying absence of duplicate functions (`clean_pool`, `split_synthetic_phishing`), absence of unsafe `trainer.predict()`, and exact adherence of `TrainingArguments` (`random` sampling, `group_by_length=False`, `bf16=True`);
    - **Block 2**: `models_config.json` inheritance, fallback mode, CLI swap test with prefix collision protection (`--models` vs `--models-config`), and `resolve_model_family` routing;
    - **Block 3**: Quota assertions in `load_verified_pools`, zero synthetic leakage in Val/Test, 100% test coverage of real phishing across 5 folds, and exact row counts across all 8 training configurations;
    - **Block 4**: Equivalence of batched inference (`batch_size=1` vs `16`) for Llama and BERT, label order preservation, and `WeightedTrainer` loss computation with `bfloat16` logits;
    - **Block 5**: Purity of shot sampling (`Zero-Shot`, `Few-Shot_Real`, `Few-Shot_Synth`), `<think>` tag stripping in `parse_prediction`, unparsed counter tracking, and recursive batch halving under CUDA OOM;
-   - **Block 6**: Round-trip save and load parity between Step 07 and `src/test.py`, backward compatibility for LoRA adapters, `is_better_fold` selection logic, `update_summary` Student's $t$ confidence intervals, `--oom-safe` parameter halving, and graceful `Ctrl+C` signal handling (`SkipConfiguration` on single interrupt, `StopAllExecution` on double interrupt).
+   - **Block 6**: Round-trip save and load parity between Step 07 and `src/eval_saved_models.py`, dynamic pipeline resolution, backward compatibility for LoRA adapters, `is_better_fold` selection logic, `update_summary` Student's $t$ confidence intervals, `--oom-safe` parameter halving, and graceful `Ctrl+C` signal handling (`SkipConfiguration` on single interrupt, `StopAllExecution` on double interrupt).
 
 ---
 

@@ -503,10 +503,6 @@ def build_train_dataframe(config_name, fold_data, pools):
         frac=1, random_state=seed
     ).reset_index(drop=True)
 
-    return pd.concat(parts, ignore_index=True).sample(
-        frac=1, random_state=seed
-    ).reset_index(drop=True)
-
 
 class TextDataset(Dataset):
     def __init__(self, encodings, labels):
@@ -1121,7 +1117,7 @@ def sample_shot_examples(fold_data, pools, mode):
     return examples
 
 
-def build_prompt(message, examples, model_key):
+def build_prompt(message, examples):
     lines = [
         "Классифицируй сообщение из мессенджера в один из классов:",
         "0 — легитимное сообщение (Ham);",
@@ -1289,7 +1285,7 @@ def run_few_shot(args, pools, folds, raw_rows, raw_path, summary_path):
                         prompts = [
                             format_prompt(
                                 tokenizer,
-                                build_prompt(message, examples, model_key),
+                                build_prompt(message, examples),
                                 enable_thinking=enable_thinking,
                             )
                             for message in test_df["message"].tolist()
@@ -1496,6 +1492,8 @@ def run_supervisor(args):
         arg for arg in sys.argv[1:] if arg not in ("--worker", "--oom-safe")
     ]
     oom_safe_next = args.oom_safe
+    consecutive_failures = 0
+    max_failures = 3
 
     while True:
         cmd = list(base_cmd)
@@ -1517,6 +1515,7 @@ def run_supervisor(args):
             return
         elif rc == EXIT_CONTINUE:
             oom_safe_next = False
+            consecutive_failures = 0
             time.sleep(2)
             continue
         elif rc == EXIT_OOM_RETRY:
@@ -1529,8 +1528,17 @@ def run_supervisor(args):
             time.sleep(4)
             continue
         else:
+            consecutive_failures += 1
+            if consecutive_failures >= max_failures:
+                print(
+                    f"\n[SUPERVISOR] Worker failed with unexpected return code {rc} "
+                    f"({consecutive_failures} consecutive failures). Aborting execution to prevent infinite loop.",
+                    flush=True,
+                )
+                sys.exit(rc)
             print(
-                f"\n[SUPERVISOR] Worker exited with code {rc}. "
+                f"\n[SUPERVISOR] Worker exited with code {rc} "
+                f"(failure {consecutive_failures}/{max_failures}). "
                 f"Restarting in 5 seconds while preserving checkpoint progress...",
                 flush=True,
             )

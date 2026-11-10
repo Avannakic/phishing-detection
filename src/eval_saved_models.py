@@ -25,8 +25,11 @@ if str(SRC_DIR) not in sys.path:
 
 
 def _load_train_pipeline():
-    script_path = Path(__file__).resolve().parent / "07_train_and_eval_all.py"
-    spec = importlib.util.spec_from_file_location("pipeline_07", script_path)
+    candidates = sorted(SRC_DIR.glob("*train_and_eval_all*.py"))
+    if not candidates:
+        raise FileNotFoundError(f"Training pipeline script (*train_and_eval_all*.py) not found in {SRC_DIR}")
+    script_path = candidates[0]
+    spec = importlib.util.spec_from_file_location("pipeline_train_eval", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -39,7 +42,6 @@ cleanup_memory = _pipeline.cleanup_memory
 direct_test_inference = _pipeline.direct_test_inference
 load_verified_pools = _pipeline.load_verified_pools
 save_predictions = _pipeline.save_predictions
-load_models_config = _pipeline.load_models_config
 
 if torch.cuda.is_available():
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -50,11 +52,6 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Re-validation of saved best model checkpoints",
         allow_abbrev=False,
-    )
-    parser.add_argument(
-        "--models-config",
-        default=str(PROJECT_ROOT / "configs" / "models_config.json"),
-        help="Path to models configuration JSON file",
     )
     parser.add_argument(
         "--best-models-dir",

@@ -72,7 +72,7 @@ PREFIX_STRIP = re.compile(
     r"здравствуйте|здравствуй|приветствую(?:\s+вас)?|привет(?:ик)?|"
     r"добрый\s+(?:день|вечер)|доброго\s+времени(?:\s+суток)?|"
     r"внимание|срочно(?:е\s+уведомление|\s+сообщение)?|важно(?:е\s+уведомление|\s+сообщение|\s+для\s+ваших\s+счетов)?|"
-    r"(?:банк\s+)?(?:втб|сбербанк|сбер|т-банк|т\s+банк|фсб(?:\s+рф|\s+россии)?|цб\s+рф|госуслуги|емиас|telegram)\s*[\:\—\-])"
+    r"(?:банк\s+)?(?:втб|сбербанк|сбер|т-банк|т\s+банк|фсб(?:\s+рф|\s+россии)?|цб\s+рф|госуслуги|емиас|медпортал|поликлиника|telegram)\s*[\:\—\-])"
     r"[!,\.\:\—\-\s]*)+",
     flags=re.IGNORECASE,
 )
@@ -133,7 +133,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
     if any(bw in line_lower_pre for bw in BAD_WORDS):
         return None
     if label_val == 2:
-        if "емиас" in line_lower_pre or line_lower_pre.startswith(BAD_STARTS):
+        if line_lower_pre.startswith(BAD_STARTS):
             return None
 
     # 4. Clean prefix junk, quotes, greetings, and sender headers
@@ -157,7 +157,7 @@ def clean_and_validate_message(raw_text: str, label_val: int) -> Optional[str]:
     if any(bw in clean_lower for bw in BAD_WORDS):
         return None
     if label_val == 2:
-        if "емиас" in clean_lower or clean_lower.startswith(BAD_STARTS):
+        if clean_lower.startswith(BAD_STARTS):
             return None
 
     min_len = 16 if label_val == 0 else 25
